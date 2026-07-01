@@ -30,12 +30,12 @@ services:
     ports:
       - "9083:9083"
     networks:
-      - datastack_net
+      - datastack-net
     deploy:
       replicas: 1
       placement:
         constraints:
-          - node.labels.nodename == node-1
+          - node.labels.name == node-1
       restart_policy:
         condition: any
         delay: 30s
@@ -74,12 +74,12 @@ services:
       - "7077:7077"
       - "8090:8090"
     networks:
-      - datastack_net
+      - datastack-net
     deploy:
       replicas: 1
       placement:
         constraints:
-          - node.labels.nodename == node-1
+          - node.labels.name == node-1
       restart_policy:
         condition: any
         delay: 10s
@@ -117,12 +117,12 @@ services:
     ports:
       - "8091:8091"
     networks:
-      - datastack_net
+      - datastack-net
     deploy:
       replicas: 1
       placement:
         constraints:
-          - node.labels.nodename == node-2
+          - node.labels.name == node-2
       restart_policy:
         condition: any
         delay: 15s
@@ -155,12 +155,12 @@ services:
     ports:
       - "8092:8092"
     networks:
-      - datastack_net
+      - datastack-net
     deploy:
       replicas: 1
       placement:
         constraints:
-          - node.labels.nodename == node-3
+          - node.labels.name == node-3
       restart_policy:
         condition: any
         delay: 15s
@@ -183,12 +183,12 @@ services:
     ports:
       - "8080:8080"
     networks:
-      - datastack_net
+      - datastack-net
     deploy:
       replicas: 1
       placement:
         constraints:
-          - node.labels.nodename == node-1
+          - node.labels.name == node-1
       restart_policy:
         condition: any
         delay: 20s
@@ -214,12 +214,12 @@ services:
       - /opt/datastack/config/trino/worker:/etc/trino:ro
       - trino_worker_data:/data/trino
     networks:
-      - datastack_net
+      - datastack-net
     deploy:
       replicas: 1
       placement:
         constraints:
-          - node.labels.nodename == node-2
+          - node.labels.name == node-2
       restart_policy:
         condition: any
         delay: 20s
@@ -239,12 +239,12 @@ services:
       - /opt/datastack/config/trino/worker:/etc/trino:ro
       - trino_worker_data:/data/trino
     networks:
-      - datastack_net
+      - datastack-net
     deploy:
       replicas: 1
       placement:
         constraints:
-          - node.labels.nodename == node-3
+          - node.labels.name == node-3
       restart_policy:
         condition: any
         delay: 20s
@@ -267,6 +267,6 @@ volumes:
     driver: local
 
 networks:
-  datastack_net:
+  datastack-net:
     external: true
-    name: datastack_net
+    name: datastack-net

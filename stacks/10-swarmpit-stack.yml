@@ -1,0 +1,103 @@
+version: "3.8"
+
+# =============================================================================
+# SWARMPIT - Interface de gerenciamento do Docker Swarm
+# UI: http://<ip-node-1>:888
+# =============================================================================
+
+services:
+  # =============================================
+  # SWARMPIT APP
+  # =============================================
+  # Fixado em 1.10 (nao usar :latest): a partir da 1.11-SNAPSHOT (commit d78d3e43,
+  # "harden auth"), POST /events passou a exigir autenticacao, mas o swarmpit/agent
+  # oficial (parado desde 2019) nunca envia token - stats ficam vazias com :latest.
+  swarmpit-app:
+    image: swarmpit/swarmpit:1.10
+    environment:
+      - SWARMPIT_DB=http://swarmpit-db:5984
+      - SWARMPIT_INFLUXDB=http://swarmpit-influxdb:8086
+    ports:
+      - "888:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - datastack-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # =============================================
+  # SWARMPIT DB (CouchDB)
+  # =============================================
+  swarmpit-db:
+    image: couchdb:2.3.0
+    volumes:
+      - swarmpit-db-data:/opt/couchdb/data
+    networks:
+      - datastack-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+
+  # =============================================
+  # SWARMPIT INFLUXDB (metricas)
+  # =============================================
+  swarmpit-influxdb:
+    image: influxdb:1.8
+    volumes:
+      - swarmpit-influxdb-data:/var/lib/influxdb
+    networks:
+      - datastack-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+
+  # =============================================
+  # SWARMPIT AGENT - todos os nos
+  # =============================================
+  swarmpit-agent:
+    image: swarmpit/agent:latest
+    environment:
+      - DOCKER_API_VERSION=1.44
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - datastack-net
+    deploy:
+      mode: global
+      labels:
+        swarmpit.agent: 'true'
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+
+volumes:
+  swarmpit-db-data:
+    driver: local
+  swarmpit-influxdb-data:
+    driver: local
+
+networks:
+  datastack-net:
+    external: true

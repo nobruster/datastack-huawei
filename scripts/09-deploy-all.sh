@@ -26,7 +26,13 @@ docker stack deploy -c 08-apps-stack.yml apps
 echo "Aguardando apps iniciar (30s)..."
 sleep 30
 
-# 4. Inicializa o Superset
+# 4. Swarmpit (gerenciamento do Swarm)
+echo "--- Deployando Swarmpit ---"
+docker stack deploy -c 10-swarmpit-stack.yml swarmpit
+echo "Aguardando Swarmpit iniciar (30s)..."
+sleep 30
+
+# 5. Inicializa o Superset
 echo "--- Inicializando Superset ---"
 SUPERSET_CONTAINER=$(docker ps -q -f name=apps_superset | head -1)
 if [ -n "$SUPERSET_CONTAINER" ]; then
@@ -40,6 +46,7 @@ echo "============================================="
 echo "=== Stack implantada com sucesso! ==="
 echo "============================================="
 echo "Portainer:    http://<ip-node-1>:9000"
+echo "Swarmpit:     http://<ip-node-1>:888"
 echo "Spark UI:     http://<ip-node-1>:8090"
 echo "Trino UI:     http://<ip-node-1>:8080"
 echo "JupyterHub:   http://<ip-node-1>:8000"
