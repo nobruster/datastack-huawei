@@ -33,7 +33,7 @@ Stack de processamento de dados rodando em **Docker Swarm** na **Huawei Cloud HC
 | Redis | 7 | 6379 | node-1 |
 | SeaweedFS | 3.65 | 9333/8333/8888 | todos |
 | Portainer | 2.20.3 | 9000 | node-1 |
-| Swarmpit | latest | 888 | node-1 |
+| Swarmpit | 1.10 (app) / latest (agent) | 888 | node-1 (app), todos (agent) |
 
 ## Estrutura do Repositório
 
@@ -55,11 +55,14 @@ datastack-huawei/
 │   └── 10-swarmpit-stack.yml     # Swarmpit (gerenciamento do Swarm)
 └── config/
     ├── trino/
-    │   ├── coordinator/          # Configuracoes do Trino Coordinator
-    │   └── worker/               # Configuracoes dos Trino Workers
+    │   ├── coordinator/          # Configuracoes do Trino Coordinator (inclui catalog/ hive + postgresql)
+    │   └── worker/               # Configuracoes dos Trino Workers (inclui catalog/ hive + postgresql)
     └── spark/
         └── spark-defaults.conf   # Configuracoes do Spark (S3/SeaweedFS)
 ```
+
+O repositório deve ser clonado em **`/opt/datastack`** em node-1 — `09-deploy-all.sh` e `07-sync-config.sh`
+assumem esse caminho.
 
 ## Deploy - Ordem de Execucao
 
@@ -97,6 +100,28 @@ upstream — não subir para `:latest` sem antes checar se o agent passou a aute
 ## Labels dos nós (Swarm)
 
 `03-swarm-networks.sh` define o label `name` em cada nó, usado pelas `placement constraints` das stacks (`node.labels.name == node-1`, etc). Sem esse label os serviços ficam presos em `Pending`.
+
+## Problemas conhecidos / Troubleshooting
+
+**`01-base-setup.sh` trava no `apt-get upgrade`.** Se a VM tiver `sshd_config` ou outro conffile já
+modificado, o `dpkg` abre um prompt interativo ("What do you want to do about modified configuration
+file...") que trava o script indefinidamente quando rodado sem TTY. Se isso acontecer:
+```bash
+dpkg --force-confold --force-confdef --configure -a
+DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confold" -o Dpkg::Options::="--force-confdef" upgrade
+```
+Considere já rodar `01-base-setup.sh` com `DEBIAN_FRONTEND=noninteractive` e essas mesmas flags de `apt-get`
+para evitar o problema.
+
+**node-2 e node-3 não têm saída para internet por padrão.** Só node-1 tem EIP; node-2/node-3 são
+private-only. Sem isso, `apt-get`/`docker pull` nesses nós dão timeout. Fix correto: criar um **NAT Gateway**
+na VPC da Huawei Cloud com regra SNAT para a subnet `<subnet-privada>` (console: NAT Gateway > Public NAT
+Gateway > regra SNAT). Não usar node-1 como NAT improvisado via iptables/`ip route` — esbarra no
+"Source/Destination Check" da Huawei Cloud e é um workaround frágil, não uma solução.
+
+**Se algum nó específico (ex: node-3) continuar sem egress mesmo com o NAT Gateway ativo:** compare os
+Security Groups dos nós — um nó com Security Group diferente/mais restritivo pode ficar de fora mesmo com a
+regra SNAT correta na subnet inteira.
 
 ## Alta disponibilidade
 

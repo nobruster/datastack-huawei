@@ -6,8 +6,13 @@ set -e
 
 echo "=== Iniciando setup base em $(hostname) ==="
 
+# Evita que dpkg trave em prompt interativo de conffile (ex: sshd_config
+# ja modificado) quando o script roda sem TTY.
+export DEBIAN_FRONTEND=noninteractive
+APT_CONFOPTS=(-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef)
+
 # Atualiza o sistema
-apt-get update && apt-get upgrade -y
+apt-get update && apt-get -y "${APT_CONFOPTS[@]}" upgrade
 apt-get install -y curl wget git vim htop net-tools nfs-common \
     software-properties-common apt-transport-https ca-certificates gnupg lsb-release
 

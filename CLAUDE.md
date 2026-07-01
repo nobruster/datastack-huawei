@@ -20,10 +20,13 @@ stack YAML files, and service config files that get deployed to real VMs over SS
 | node-3 | <ip-node-3> | none | Swarm manager, Spark Worker, Trino Worker, SeaweedFS |
 
 Swarm runs with **3 managers** (Raft quorum, tolerates 1 node loss) — not 1 manager + 2 workers. Only
-node-1 has a public EIP; node-2/node-3 are private-only and have **no internet egress by default**. Getting
-them apt-get access requires either a Huawei Cloud NAT Gateway (SNAT rule for the subnet) or disabling
-"Source/Destination Check" on node-1's NIC and using it as an ad-hoc router — the latter is a temporary
-workaround only, not something to leave configured permanently.
+node-1 has a public EIP; node-2/node-3 are private-only and have **no internet egress by default**. The
+correct fix is a Huawei Cloud **NAT Gateway** (SNAT rule for the `<subnet-privada>` subnet) configured in the
+VPC console. Do not route node-2/node-3 traffic through node-1 via ad-hoc iptables MASQUERADE + route
+changes — it requires disabling "Source/Destination Check" on node-1's NIC (a real security control) and is
+fragile; treat it as a last-resort temporary measure, never a standing configuration. If one specific node
+still has no egress after the NAT Gateway is up, its Security Group is the next thing to check — nodes can
+end up in a different/more restrictive group than their siblings.
 
 ## Deploy order
 
@@ -66,6 +69,14 @@ These have been sources of real bugs before — check both sides when touching e
   why `07-sync-config.sh` exists: it rsyncs `/opt/datastack/config/` to node-2 and node-3 after any change
   on node-1, before deploying or redeploying `06-datastack.yml`/`08-apps-stack.yml`.
 
+- **Swarmpit app is pinned to `1.10`, not `:latest`.** `swarmpit/swarmpit:latest` (from `1.11-SNAPSHOT`
+  onward, commit `d78d3e43` "harden auth") requires authentication on `POST /events`. The official
+  `swarmpit/agent` image on Docker Hub hasn't been updated since 2019 and never sends an auth token on that
+  call, so with `:latest` the agent's requests get silently rejected (`401 Unauthorized`) and the
+  CPU/Memory/Disk dashboard graphs stay empty forever — no error surfaces anywhere except in the raw HTTP
+  response if you capture traffic. `1.10` is the last tag before that change. Don't bump `swarmpit-app` past
+  `1.10` unless the agent has also been updated to authenticate.
+
 ## Placeholder secrets
 
 Passwords, keys, and secrets throughout `config/` and `stacks/*.yml` are literal placeholders ending in
@@ -81,6 +92,15 @@ Coordinator, Hive Metastore, PostgreSQL, and Redis are all pinned to node-1 via 
 no standby/replica. If node-1 goes down, those services stay down until it returns — this is the current
 architecture, not a bug to silently "fix" by removing constraints (removing them would break the bind-mount
 assumption above).
+
+## Known gotchas
+
+- **`01-base-setup.sh`'s `apt-get upgrade` can hang forever when run non-interactively.** If a conffile
+  (e.g. `/etc/ssh/sshd_config`) was already modified on the image, `dpkg` opens an interactive prompt with
+  no TTY to answer it, and the script blocks indefinitely rather than failing. Recovery: `dpkg
+  --force-confold --force-confdef --configure -a`, then re-run `apt-get` with
+  `DEBIAN_FRONTEND=noninteractive -o Dpkg::Options::="--force-confold" -o Dpkg::Options::="--force-confdef"`.
+  Prefer running the script with those flags from the start on unfamiliar images.
 
 ## Validating cluster state
 
