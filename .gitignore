@@ -1,0 +1,3 @@
+# Certificados/chaves TLS do SeaweedFS Admin - gerados por deploy, nao versionados.
+# Gere com o comando documentado no README (secao "Storage - SeaweedFS").
+config/seaweedfs/tls/

@@ -240,6 +240,15 @@ acesso via EIP ainda depende do Security Group liberar essas portas.)
 **Portainer Agent (modo `global`) com o mesmo bug de porta em `ingress` do SeaweedFS.** Mesma causa e
 mesmo fix: porta 9001 publicada com `mode: host`.
 
+**SeaweedFS Admin: login "não funciona" pelo IP/EIP (volta pro `/login` depois de autenticar), mas funciona
+via `localhost`.** O `weed admin` marca o cookie de sessão como **`Secure`** — só trafega por HTTPS. Em HTTP
+puro, o navegador só envia cookie Secure para `localhost` (contexto seguro); por qualquer outro host (IP/EIP)
+ele não envia, e o `/admin` chuta de volta pro `/login`. Fix: o serviço `seaweedfs-admin` roda com TLS
+habilitado via `config/seaweedfs/security.toml` (`[https.admin]` apontando pra `config/seaweedfs/tls/`),
+então acesse por **`https://<ip-node-1>:23646`** (cert self-signed — o navegador avisa, é só prosseguir).
+Workaround sem HTTPS: túnel SSH `ssh -L 23646:localhost:23646 root@<eip>` e abrir
+`http://localhost:23646`.
+
 ## Alta disponibilidade
 
 - **Cluster Swarm:** 3 managers em Raft — tolera a queda de 1 nó sem perder o quorum (`docker node ls` continua respondendo, novos serviços podem ser agendados nos nós restantes).
@@ -257,7 +266,7 @@ mesmo fix: porta 9001 publicada com `mode: host`.
 | JupyterHub | http://<ip-node-1>:8000 |
 | Superset | http://<ip-node-1>:8088 |
 | SeaweedFS UI (master) | http://<ip-node-1>:9333 |
-| SeaweedFS Admin (dashboard c/ login) | http://<ip-node-1>:23646 |
+| SeaweedFS Admin (dashboard c/ login) | https://<ip-node-1>:23646 |
 | S3 API | http://<ip-node-1>:8333 |
 
 ## Storage - SeaweedFS
@@ -267,12 +276,21 @@ mesmo fix: porta 9001 publicada com `mode: host`.
 - **Capacidade usavel:** ~4.5 TB com replicacao 2x
 - **S3 endpoint:** http://<ip-node-1>:8333 externo, ou `http://seaweedfs-filer-1:8333` de dentro de outro
   container no `datastack-net` (sem autenticacao na rede interna)
-- **Admin Dashboard:** http://<ip-node-1>:23646 — UI de administracao com login (volumes, buckets do
+- **Admin Dashboard:** https://<ip-node-1>:23646 — UI de administracao com login (volumes, buckets do
   Object Store, users/policies do S3, file browser, metricas, logs). Usuario `admin`, senha definida em
   `-adminPassword` no serviço `seaweedfs-admin` (`stacks/05-seaweedfs-stack.yml`; placeholder
   `seaweedfs_admin_CHANGE_ME`). O subcomando `admin` so existe a partir do SeaweedFS 3.80 — por isso esse
   serviço usa a imagem `3.95` enquanto o resto do cluster segue na `3.65` (o admin fala com os masters via
-  gRPC, compativel). Se `-adminPassword` ficar vazio, a autenticacao e desabilitada.
+  gRPC, compativel). Se `-adminPassword` ficar vazio, a autenticacao e desabilitada. Roda em **HTTPS**
+  (cert self-signed) por causa do cookie Secure — ver Troubleshooting.
+
+  **Antes do deploy**, gere o par de certificados TLS do admin (nao vao versionados; ver `.gitignore`):
+  ```bash
+  mkdir -p config/seaweedfs/tls && cd config/seaweedfs/tls
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout admin.key -out admin.crt -days 3650 \
+    -subj "/CN=seaweedfs-admin" \
+    -addext "subjectAltName=IP:<ip-node-1>,IP:<eip>,DNS:localhost"
+  ```
 
 ## Acesso SSH
 

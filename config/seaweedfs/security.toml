@@ -1,0 +1,8 @@
+# SeaweedFS security config - habilita HTTPS no Admin Dashboard.
+# Necessario porque o admin marca o cookie de sessao como Secure: sem HTTPS,
+# o login "funciona" mas o cookie nao volta por HTTP quando acessado via IP/EIP
+# (so via localhost, que o navegador trata como contexto seguro), e o /admin
+# chuta de volta pro /login. Com TLS, https://<IP>:23646 funciona direto.
+[https.admin]
+cert = "/etc/seaweedfs/tls/admin.crt"
+key  = "/etc/seaweedfs/tls/admin.key"

@@ -228,9 +228,14 @@ services:
   # ---------------------------------------------------------------------------
   seaweedfs-admin:
     image: chrislusf/seaweedfs:3.95
+    # HTTPS habilitado via security.toml ([https.admin]) - obrigatorio para
+    # acesso pelo IP/EIP: o cookie de sessao do admin e Secure, entao so
+    # trafega por HTTPS (ou localhost). Acesse https://<ip-node-1>:23646
     command: admin -port=23646 -masters=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -dataDir=/data -adminUser=admin -adminPassword=seaweedfs_admin_CHANGE_ME
     volumes:
       - seaweedfs-admin:/data
+      - /opt/datastack/config/seaweedfs/security.toml:/etc/seaweedfs/security.toml:ro
+      - /opt/datastack/config/seaweedfs/tls:/etc/seaweedfs/tls:ro
     ports:
       - "23646:23646"
     networks:
