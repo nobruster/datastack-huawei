@@ -11,7 +11,7 @@ SECRET_KEY = os.environ.get("SUPERSET_SECRET_KEY", "CHANGE_ME_super_secret_key_3
 # Banco de dados do Superset (PostgreSQL no node-1)
 SQLALCHEMY_DATABASE_URI = os.environ.get(
     "SUPERSET_DATABASE_URI",
-    "postgresql+psycopg2://superset:superset_password_CHANGE_ME@<ip-node-1>:5432/superset"
+    "postgresql+psycopg2://superset:superset_password_CHANGE_ME@postgres:5432/superset"
 )
 
 # Redis para cache e Celery

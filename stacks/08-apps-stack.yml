@@ -58,13 +58,14 @@ services:
     environment:
       - SUPERSET_SECRET_KEY=superset_secret_CHANGE_ME
       - REDIS_URL=redis://redis:6379/0
-      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://superset:superset_CHANGE_ME@node-1:5432/superset
+      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://superset:superset_password_CHANGE_ME@postgres:5432/superset
       - SUPERSET_WEBSERVER_PORT=8088
       - PYTHONPATH=/app/pythonpath
     ports:
       - "8088:8088"
     volumes:
       - superset-data:/app/superset_home
+      - /opt/datastack/config/superset/superset_config.py:/app/pythonpath/superset_config.py:ro
     networks:
       - datastack-net
     deploy:
@@ -91,10 +92,11 @@ services:
     environment:
       - SUPERSET_SECRET_KEY=superset_secret_CHANGE_ME
       - REDIS_URL=redis://redis:6379/0
-      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://superset:superset_CHANGE_ME@node-1:5432/superset
+      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://superset:superset_password_CHANGE_ME@postgres:5432/superset
       - PYTHONPATH=/app/pythonpath
     volumes:
       - superset-data:/app/superset_home
+      - /opt/datastack/config/superset/superset_config.py:/app/pythonpath/superset_config.py:ro
     networks:
       - datastack-net
     deploy:

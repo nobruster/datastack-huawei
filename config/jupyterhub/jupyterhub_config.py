@@ -21,17 +21,19 @@ c.DockerSpawner.remove = True
 c.DockerSpawner.debug = True
 
 # Rede Docker
-c.DockerSpawner.network_name = "datastack_net"
+c.DockerSpawner.network_name = "datastack-net"
 c.DockerSpawner.use_internal_ip = True
 
 # Variaveis de ambiente para Spark
+# Nomes de servico do Swarm (nao IP/hostname de VM: nao resolvem/roteiam de
+# dentro de um container na rede overlay).
 c.DockerSpawner.environment = {
-    "SPARK_MASTER": "spark://<ip-node-1>:7077",
+    "SPARK_MASTER": "spark://spark-master:7077",
     "SPARK_HOME": "/usr/local/spark",
     "HADOOP_CONF_DIR": "/opt/hadoop/conf",
     "AWS_ACCESS_KEY_ID": "",
     "AWS_SECRET_ACCESS_KEY": "",
-    "AWS_ENDPOINT_URL": "http://<ip-node-1>:8333",
+    "AWS_ENDPOINT_URL": "http://seaweedfs-filer-1:8333",
 }
 
 # Volumes persistentes por usuario

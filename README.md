@@ -14,26 +14,37 @@ Stack de processamento de dados rodando em **Docker Swarm** na **Huawei Cloud HC
 
 | Nó | IP Privado | EIP | Papel |
 |---|---|---|---|
-| node-1 | <ip-node-1> | <eip> | Spark Master, Trino Coordinator, Hive, PostgreSQL, JupyterHub, Superset, Redis, Portainer, Swarmpit |
-| node-2 | <ip-node-2> | - | Spark Worker, Trino Worker, SeaweedFS |
-| node-3 | <ip-node-3> | - | Spark Worker, Trino Worker, SeaweedFS |
+| node-1 | <ip-node-1> | <eip> | Swarm manager (leader), PostgreSQL, Hive Metastore, Spark Master, Spark History Server, Trino Coordinator, Redis, JupyterHub, Superset, Portainer, Swarmpit |
+| node-2 | <ip-node-2> | - | Swarm manager, Spark Worker, Trino Worker, SeaweedFS (master+volume+filer) |
+| node-3 | <ip-node-3> | - | Swarm manager, Spark Worker, Trino Worker, SeaweedFS (master+volume+filer) |
 
-## Componentes da Stack
+## Componentes da Stack e Portas
 
-| Serviço | Versão | Porta | Nó |
-|---|---|---|---|
-| Apache Spark Master | 3.5 | 8090, 7077 | node-1 |
-| Apache Spark Worker | 3.5 | 8091, 8092 | node-2, node-3 |
-| Trino Coordinator | 435 | 8080 | node-1 |
-| Trino Worker | 435 | 8080 | node-2, node-3 |
-| Hive Metastore | 3.1.3 | 9083 | node-1 |
-| PostgreSQL | 15 | 5432 | node-1 (local) |
-| JupyterHub | 4.1 | 8000 | node-1 |
-| Apache Superset | 3.1.3 | 8088 | node-1 |
-| Redis | 7 | 6379 | node-1 |
-| SeaweedFS | 3.65 | 9333/8333/8888 | todos |
-| Portainer | 2.20.3 | 9443 | node-1 |
-| Swarmpit | 1.10 (app) / latest (agent) | 888 | node-1 (app), todos (agent) |
+Todos os serviços rodam em container Docker (nenhum roda nativo no host). Portas marcadas com 🌐 são
+acessadas externamente (navegador/cliente fora do cluster); as demais são só para comunicação
+container-a-container via nome de serviço do Swarm.
+
+| Serviço | Versão | Porta(s) | Nó | Stack |
+|---|---|---|---|---|
+| PostgreSQL | 15 | 5432 | node-1 | datastack |
+| Hive Metastore | 3.1.3 | 9083 | node-1 | datastack |
+| Apache Spark Master | 3.5 | 🌐 8090 (UI), 7077 (RPC) | node-1 | datastack |
+| Apache Spark Worker | 3.5 | 🌐 8091 (node-2), 8092 (node-3) | node-2, node-3 | datastack |
+| Spark History Server | 3.5 | 🌐 18081 | node-1 | datastack |
+| Trino Coordinator | 435 | 🌐 8080 | node-1 | datastack |
+| Trino Worker | 435 | 8080 (interno) | node-2, node-3 | datastack |
+| SeaweedFS Master | 3.65 | 🌐 9333, 19333 | todos | seaweedfs |
+| SeaweedFS Volume | 3.65 | 8081, 18080 | todos | seaweedfs |
+| SeaweedFS Filer (+ S3 API) | 3.65 | 🌐 8888, 🌐 8333 | todos | seaweedfs |
+| Redis | 7 | 6379 | node-1 | apps |
+| JupyterHub | 4.1 | 🌐 8000 | node-1 | apps |
+| Apache Superset | 3.1.3 | 🌐 8088 | node-1 | apps |
+| Portainer | 2.20.3 | 🌐 9000 (HTTP), 🌐 9443 (HTTPS) | node-1 | apps |
+| Portainer Agent | 2.20.3 | 9001 | todos | apps |
+| Swarmpit App | 1.10 | 🌐 888 | node-1 | swarmpit |
+| Swarmpit Agent | latest | - | todos | swarmpit |
+| Swarmpit DB (CouchDB) | 2.3.0 | 5984 (interno) | node-1 | swarmpit |
+| Swarmpit InfluxDB | 1.8 | 8086 (interno) | node-1 | swarmpit |
 
 ## Estrutura do Repositório
 
@@ -45,15 +56,16 @@ datastack-huawei/
 │   ├── 01-base-setup.sh          # Setup base (Docker, disco, hosts) - todos os nos
 │   ├── 02-swarm-init.sh          # Inicializa Docker Swarm no node-1
 │   ├── 03-swarm-networks.sh      # Cria rede overlay e labels (role, name)
-│   ├── 04-postgresql.sh          # Instala e configura PostgreSQL no node-1
 │   ├── 07-sync-config.sh         # Sincroniza config/ para node-2/node-3 (bind mounts)
 │   └── 09-deploy-all.sh          # Deploy completo de todas as stacks
 ├── stacks/
 │   ├── 05-seaweedfs-stack.yml    # SeaweedFS distribuido (Masters + Volumes + Filers)
-│   ├── 06-datastack.yml          # Hive + Spark + Trino
+│   ├── 06-datastack.yml          # PostgreSQL + Hive + Spark (+ History Server) + Trino
 │   ├── 08-apps-stack.yml         # Redis + JupyterHub + Superset + Portainer
 │   └── 10-swarmpit-stack.yml     # Swarmpit (gerenciamento do Swarm)
 └── config/
+    ├── postgres/
+    │   └── init.sql              # Cria databases/usuarios hive e superset (1a inicializacao)
     ├── trino/
     │   ├── coordinator/          # Configuracoes do Trino Coordinator (inclui catalog/ hive + postgresql)
     │   └── worker/               # Configuracoes dos Trino Workers (inclui catalog/ hive + postgresql)
@@ -63,6 +75,15 @@ datastack-huawei/
 
 O repositório deve ser clonado em **`/opt/datastack`** em node-1 — `09-deploy-all.sh` e `07-sync-config.sh`
 assumem esse caminho.
+
+## PostgreSQL é containerizado
+
+Não existe mais serviço nativo/instalado no host — todo o stack roda em Docker. PostgreSQL é o serviço
+`postgres` dentro de `06-datastack.yml` (dados em `/data/postgres`, no disco de 3TB). Isso é proposital, não
+só estilo: um Postgres nativo no host só seria alcançável por containers rodando no **mesmo** nó (via
+`docker_gwbridge`, que não atravessa nós) — inviável para `trino-worker-node2`/`node3`, que carregam todos
+os catálogos configurados (incluindo `postgresql`) rodando em node-2/node-3. Como serviço do Swarm, fica
+acessível como `postgres:5432` de qualquer nó.
 
 ## Deploy - Ordem de Execucao
 
@@ -80,7 +101,6 @@ docker swarm join --token <TOKEN> <ip-node-1>:2377
 
 # 4. Somente no node-1
 bash scripts/03-swarm-networks.sh
-bash scripts/04-postgresql.sh
 bash scripts/07-sync-config.sh
 bash scripts/09-deploy-all.sh
 ```
@@ -103,6 +123,21 @@ tráfego) e o mesmo sintoma de dashboard vazio acima. `1.10` é a véspera da mu
 
 **`DOCKER_API_VERSION=1.44` no agent.** O engine instalado (29.6.1) exige API mínima 1.40; a versão antiga
 usada em exemplos legados (`1.35`) faz o agent entrar em crash-loop (`panic: Event collector is broken`).
+
+## Regra geral: nomes de serviço do Swarm, nunca hostname de VM ou IP real
+
+Toda string de conexão entre serviços (Postgres, Hive Metastore, S3, Spark master, discovery URI do Trino,
+etc) deve usar o **nome do serviço no Swarm** (`postgres`, `spark-master`, `hive-metastore`,
+`seaweedfs-filer-1`, `trino-coordinator`...) — nunca:
+
+- **hostname de VM** (`node-1`, `node-2`, `node-3`): o DNS interno da rede overlay só resolve nomes de
+  serviço, não hostname de VM. Resultado: `no such host` e crash-loop.
+- **IP real da VM** (`<ip-node-1>`, etc): containers não têm rota nenhuma até a rede real das VMs — só
+  até a rede overlay e o `docker_gwbridge` do próprio nó (que não atravessa nós). A conexão simplesmente
+  nunca chega no destino (timeout/reset).
+
+Única exceção: URLs de UI nos comentários/README (ex: `http://<ip-node-1>:8090`) — essas são abertas de
+um navegador **fora** do cluster, onde o IP real é exatamente o que se quer.
 
 ## Labels dos nós (Swarm)
 
@@ -133,10 +168,41 @@ regra SNAT correta na subnet inteira. Nesse caso, serviços `global` (que precis
 especificamente — dá pra contornar levando a imagem via `docker save` no node-1 + `scp` + `docker load` +
 `docker tag` no nó afetado, mas isso é só paliativo até o Security Group ser corrigido.
 
-**`04-postgresql.sh` falha com "Unable to locate package postgresql-15".** Ubuntu 22.04 (jammy) só tem
-PostgreSQL 14 nos repositórios padrão. O script já adiciona o repositório oficial PGDG
-(`apt.postgresql.org`) automaticamente antes de instalar — se isso ainda falhar, confirme que o node tem
-acesso a `apt.postgresql.org` (mesma questão de NAT Gateway acima).
+**PostgreSQL: `authentication type 10 is not supported`.** PostgreSQL 15 usa SCRAM-SHA-256 por padrão, mas
+o driver JDBC embutido no Hive Metastore 3.1.3 é antigo demais para suportar isso. O serviço `postgres` em
+`06-datastack.yml` já roda com `-c password_encryption=md5`; se você recriar o volume `/data/postgres` do
+zero, esse flag precisa continuar lá (ou os usuários criados via `init.sql` voltam a usar SCRAM).
+
+**`bitnami/spark` não existe mais no Docker Hub** (`docker pull` retorna "not found", não erro de
+rede/autenticação). A Broadcom/VMware descontinuou as imagens gratuitas `bitnami/*` em 2025. A stack já usa
+`bitnamilegacy/spark:3.5` (espelho congelado, mesma tag). Se isso voltar a acontecer com qualquer imagem
+`bitnami/*`, procure o equivalente em `bitnamilegacy/<nome>` antes de assumir outro problema.
+
+**Trino 435 rejeita propriedades que exemplos/docs antigos ainda mostram — erro fatal, não warning.**
+`config.properties` não pode ter `query.max-total-memory-per-node` (obsoleta) nem `node.data-dir` duplicado
+(já fica em `node.properties`); `catalog/hive.properties` não pode ter `hive.s3select-pushdown.enabled`
+(obsoleta). Qualquer propriedade não reconhecida derruba o processo inteiro na inicialização.
+
+**Trino: `AccessDeniedException` ao criar `spiller-spill-path`.** O container roda como uid 1000; o path de
+spill precisa estar dentro de um volume já montado e gravável, ex: `/data/trino/spill` — não
+`/mnt/data/trino-spill` (path solto no filesystem do container, sem permissão para uid 1000 criar).
+
+**node-2/node-3: Spark Worker + Trino Worker brigando por memória no mesmo nó de 128GB.** Os dois foram
+originalmente dimensionados como se cada um tivesse um nó de 128GB só pra ele (`SPARK_WORKER_MEMORY=90G` +
+Trino `-Xmx100G`, reserva Docker de 80G cada) — juntos passam de 160G reservados num nó de 128GB, e o Swarm
+deixa um dos dois preso em `Pending` ("insufficient resources"). Ajustado para caber os dois: Spark Worker
+`SPARK_WORKER_MEMORY=40G` / limite Docker 48G / reserva 32G; Trino Worker `-Xmx40G` / limite 48G / reserva
+32G — sobra espaço pro SeaweedFS (master+volume+filer) e o SO no mesmo nó.
+
+**Superset: `superset_config.py` nunca era montado no container.** `stacks/08-apps-stack.yml` setava
+`PYTHONPATH=/app/pythonpath` mas não montava o arquivo ali — Superset rodava só com config padrão (Celery
+usando SQLite local em vez de Redis). Corrigido com bind mount de
+`config/superset/superset_config.py:/app/pythonpath/superset_config.py:ro` em `superset` e
+`superset-worker`. **Pendência conhecida:** mesmo com o fix, `superset-worker` ainda falha
+(`RestartFreqExceeded`) tentando abrir `sqla+sqlite:///celerydb.sqlite` — parece ser o scheduler do Celery
+beat tentando usar um arquivo local que o container não tem como escrever; não investigado a fundo. Isso
+afeta só relatórios/queries assíncronas agendadas — o Superset principal (`apps_superset`) funciona
+normalmente sem o worker.
 
 **SeaweedFS: portas de serviços replicados (master/volume/filer, 3 réplicas cada) em modo `ingress`
 colidem entre si.** Publicar a mesma porta (`"9333:9333"`, etc) em 3 serviços diferentes falha com `port
@@ -169,7 +235,7 @@ mesmo fix: porta 9001 publicada com `mode: host`.
 ## Alta disponibilidade
 
 - **Cluster Swarm:** 3 managers em Raft — tolera a queda de 1 nó sem perder o quorum (`docker node ls` continua respondendo, novos serviços podem ser agendados nos nós restantes).
-- **Serviços fixos por nó:** Spark Master, Trino Coordinator, Hive Metastore, PostgreSQL e Redis são pinados no node-1 via placement constraint — se o node-1 cair, esses serviços especificos ficam indisponíveis até o node-1 voltar (não há standby/replica configurada). Isso é uma limitação de arquitetura atual, não um bug.
+- **Serviços fixos por nó:** PostgreSQL, Hive Metastore, Spark Master, Trino Coordinator e Redis são pinados no node-1 via placement constraint — se o node-1 cair, esses serviços especificos ficam indisponíveis até o node-1 voltar (não há standby/replica configurada). Isso é uma limitação de arquitetura atual, não um bug — um Postgres em cluster (replicação + failover) foi avaliado e propositalmente adiado como projeto separado.
 
 ## Servicos apos deploy
 
@@ -178,6 +244,7 @@ mesmo fix: porta 9001 publicada com `mode: host`.
 | Portainer | https://<ip-node-1>:9443 |
 | Swarmpit | http://<ip-node-1>:888 |
 | Spark UI | http://<ip-node-1>:8090 |
+| Spark History Server | http://<ip-node-1>:18081 |
 | Trino UI | http://<ip-node-1>:8080 |
 | JupyterHub | http://<ip-node-1>:8000 |
 | Superset | http://<ip-node-1>:8088 |
@@ -189,7 +256,8 @@ mesmo fix: porta 9001 publicada com `mode: host`.
 - **Replicacao:** 010 (2 copias em racks diferentes)
 - **Capacidade raw:** ~9 TB (3 nos x 3 TB)
 - **Capacidade usavel:** ~4.5 TB com replicacao 2x
-- **S3 endpoint:** http://node-1:8333 (sem autenticacao na rede interna)
+- **S3 endpoint:** http://<ip-node-1>:8333 externo, ou `http://seaweedfs-filer-1:8333` de dentro de outro
+  container no `datastack-net` (sem autenticacao na rede interna)
 
 ## Acesso SSH
 
