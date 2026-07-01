@@ -240,6 +240,13 @@ acesso via EIP ainda depende do Security Group liberar essas portas.)
 **Portainer Agent (modo `global`) com o mesmo bug de porta em `ingress` do SeaweedFS.** Mesma causa e
 mesmo fix: porta 9001 publicada com `mode: host`.
 
+**SeaweedFS Admin: `404 page not found` ao clicar num bucket.** O dashboard é **ALPHA** e tem links
+internos quebrados: o nome do bucket aponta para `/s3/buckets/<nome>` (rota inexistente). As rotas que
+funcionam usam o prefixo `/object-store/`: detalhe do bucket em `/object-store/buckets/<nome>`, conteúdo no
+File Browser em `/files?path=/buckets/<nome>`, lista em `/object-store/buckets`. O bucket em si é criado
+normalmente (confirmável via S3 API `GET http://<ip-node-1>:8333/` ou no filer em `/buckets/<nome>`) — é
+só o link da UI que está errado, não dá pra corrigir sem mexer no binário upstream.
+
 **SeaweedFS Admin: login "não funciona" pelo IP/EIP (volta pro `/login` depois de autenticar), mas funciona
 via `localhost`.** O `weed admin` marca o cookie de sessão como **`Secure`** — só trafega por HTTPS. Em HTTP
 puro, o navegador só envia cookie Secure para `localhost` (contexto seguro); por qualquer outro host (IP/EIP)
