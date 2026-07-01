@@ -229,6 +229,13 @@ da tarefa.
 para um caminho que nunca é criado; o disco de 3TB real fica em `/data/seaweedfs/volume` (criado por
 `01-base-setup.sh`). Já corrigido no bind mount.
 
+**SeaweedFS: portas (9333/8333/8888/8081) recusam conexão pelo host/EIP (`ERR_CONNECTION_REFUSED`) apesar
+do serviço estar UP.** Com `mode: host`, o docker-proxy encaminha a porta do host para o container pela
+interface `docker_gwbridge` (172.18.x), mas o `-ip=seaweedfs-master-N` faz o SeaweedFS escutar **só no IP
+da rede overlay** (10.0.3.x), nunca em 0.0.0.0 — então o encaminhamento nunca alcança o processo. Todos os
+comandos (master/volume/filer) já incluem `-ip.bind=0.0.0.0` para escutar em todas as interfaces. (O
+acesso via EIP ainda depende do Security Group liberar essas portas.)
+
 **Portainer Agent (modo `global`) com o mesmo bug de porta em `ingress` do SeaweedFS.** Mesma causa e
 mesmo fix: porta 9001 publicada com `mode: host`.
 

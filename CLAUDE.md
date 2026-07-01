@@ -143,6 +143,14 @@ These have been sources of real bugs before — check both sides when touching e
   This hit `05-seaweedfs-stack.yml` (3x master/volume/filer, one per node, same ports each) and
   `08-apps-stack.yml`'s `portainer-agent` (`mode: global`). Fix: publish with the long syntax and
   `mode: host` instead of the `"host:container"` shorthand.
+- **`mode: host` publishing only reaches the container if the process listens on 0.0.0.0, not just the
+  overlay IP.** With `mode: host`, docker-proxy forwards the host port to the container via its
+  `docker_gwbridge` interface (172.18.x), *not* the overlay interface (10.0.3.x). SeaweedFS's `-ip=<name>`
+  flag makes it bind its listener only to the overlay IP, so the host port answered `ERR_CONNECTION_REFUSED`
+  even though the service was healthy and reachable by service name from inside the overlay. Fix: every
+  SeaweedFS command (master/volume/filer) sets `-ip.bind=0.0.0.0`. Any other host-mode-published container
+  that lets you pin its bind address needs the same treatment — a service being reachable by service name
+  from another container does *not* mean its host-published port works.
 - **SeaweedFS Volume uses port 8081, not SeaweedFS's documented default 8080** — 8080 collides with Trino
   Coordinator when both land on node-1 (both use `mode: host`, so it's a real same-node conflict, not just
   a same-service-replica one). SeaweedFS Volume's data dir bind-mounts to `/data/seaweedfs/volume` (created
