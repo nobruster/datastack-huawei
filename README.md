@@ -36,6 +36,7 @@ container-a-container via nome de serviço do Swarm.
 | SeaweedFS Master | 3.65 | 🌐 9333, 19333 | todos | seaweedfs |
 | SeaweedFS Volume | 3.65 | 8081, 18080 | todos | seaweedfs |
 | SeaweedFS Filer (+ S3 API) | 3.65 | 🌐 8888, 🌐 8333 | todos | seaweedfs |
+| SeaweedFS Admin (dashboard) | 3.95 | 🌐 23646 | node-1 | seaweedfs |
 | Redis | 7 | 6379 | node-1 | apps |
 | JupyterHub | 4.1 | 🌐 8000 | node-1 | apps |
 | Apache Superset | 3.1.3 | 🌐 8088 | node-1 | apps |
@@ -255,7 +256,8 @@ mesmo fix: porta 9001 publicada com `mode: host`.
 | Trino UI | http://<ip-node-1>:8080 |
 | JupyterHub | http://<ip-node-1>:8000 |
 | Superset | http://<ip-node-1>:8088 |
-| SeaweedFS UI | http://<ip-node-1>:9333 |
+| SeaweedFS UI (master) | http://<ip-node-1>:9333 |
+| SeaweedFS Admin (dashboard c/ login) | http://<ip-node-1>:23646 |
 | S3 API | http://<ip-node-1>:8333 |
 
 ## Storage - SeaweedFS
@@ -265,6 +267,12 @@ mesmo fix: porta 9001 publicada com `mode: host`.
 - **Capacidade usavel:** ~4.5 TB com replicacao 2x
 - **S3 endpoint:** http://<ip-node-1>:8333 externo, ou `http://seaweedfs-filer-1:8333` de dentro de outro
   container no `datastack-net` (sem autenticacao na rede interna)
+- **Admin Dashboard:** http://<ip-node-1>:23646 — UI de administracao com login (volumes, buckets do
+  Object Store, users/policies do S3, file browser, metricas, logs). Usuario `admin`, senha definida em
+  `-adminPassword` no serviço `seaweedfs-admin` (`stacks/05-seaweedfs-stack.yml`; placeholder
+  `seaweedfs_admin_CHANGE_ME`). O subcomando `admin` so existe a partir do SeaweedFS 3.80 — por isso esse
+  serviço usa a imagem `3.95` enquanto o resto do cluster segue na `3.65` (o admin fala com os masters via
+  gRPC, compativel). Se `-adminPassword` ficar vazio, a autenticacao e desabilitada.
 
 ## Acesso SSH
 

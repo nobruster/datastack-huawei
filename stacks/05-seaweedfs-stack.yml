@@ -220,6 +220,30 @@ services:
         condition: on-failure
         delay: 10s
 
+  # ---------------------------------------------------------------------------
+  # SeaweedFS Admin Dashboard (node-1) - UI: http://<ip-node-1>:23646
+  # O subcomando `admin` so existe a partir da 3.80; o resto do cluster roda
+  # 3.65 (o admin fala com os masters via gRPC, compativel). Login/senha via
+  # -adminUser/-adminPassword (se a senha ficar vazia, a auth e desabilitada).
+  # ---------------------------------------------------------------------------
+  seaweedfs-admin:
+    image: chrislusf/seaweedfs:3.95
+    command: admin -port=23646 -masters=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -dataDir=/data -adminUser=admin -adminPassword=seaweedfs_admin_CHANGE_ME
+    volumes:
+      - seaweedfs-admin:/data
+    ports:
+      - "23646:23646"
+    networks:
+      - datastack-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+
 volumes:
   seaweedfs-master-1:
   seaweedfs-master-2:
@@ -227,6 +251,7 @@ volumes:
   seaweedfs-filer-1:
   seaweedfs-filer-2:
   seaweedfs-filer-3:
+  seaweedfs-admin:
 
 networks:
   datastack-net:
