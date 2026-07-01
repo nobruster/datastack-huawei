@@ -3,6 +3,12 @@ version: "3.8"
 # =============================================================================
 # SWARMPIT - Interface de gerenciamento do Docker Swarm
 # UI: http://<ip-node-1>:888
+#
+# Nomes de servico (app/db/influxdb/agent, sem prefixo "swarmpit-") sao
+# obrigatorios: o swarmpit/agent tem o endpoint padrao hardcoded para
+# http://app:8080 (ver github.com/swarmpit/agent setup/args.go). Com outro
+# nome de servico o agent fica preso em "Waiting for Swarmpit..." para sempre,
+# nunca envia stats/eventos, e o InfluxDB fica vazio sem nenhum erro visivel.
 # =============================================================================
 
 services:
@@ -12,11 +18,11 @@ services:
   # Fixado em 1.10 (nao usar :latest): a partir da 1.11-SNAPSHOT (commit d78d3e43,
   # "harden auth"), POST /events passou a exigir autenticacao, mas o swarmpit/agent
   # oficial (parado desde 2019) nunca envia token - stats ficam vazias com :latest.
-  swarmpit-app:
+  app:
     image: swarmpit/swarmpit:1.10
     environment:
-      - SWARMPIT_DB=http://swarmpit-db:5984
-      - SWARMPIT_INFLUXDB=http://swarmpit-influxdb:8086
+      - SWARMPIT_DB=http://db:5984
+      - SWARMPIT_INFLUXDB=http://influxdb:8086
     ports:
       - "888:8080"
     volumes:
@@ -40,7 +46,7 @@ services:
   # =============================================
   # SWARMPIT DB (CouchDB)
   # =============================================
-  swarmpit-db:
+  db:
     image: couchdb:2.3.0
     volumes:
       - swarmpit-db-data:/opt/couchdb/data
@@ -58,7 +64,7 @@ services:
   # =============================================
   # SWARMPIT INFLUXDB (metricas)
   # =============================================
-  swarmpit-influxdb:
+  influxdb:
     image: influxdb:1.8
     volumes:
       - swarmpit-influxdb-data:/var/lib/influxdb
@@ -76,7 +82,7 @@ services:
   # =============================================
   # SWARMPIT AGENT - todos os nos
   # =============================================
-  swarmpit-agent:
+  agent:
     image: swarmpit/agent:latest
     environment:
       - DOCKER_API_VERSION=1.44

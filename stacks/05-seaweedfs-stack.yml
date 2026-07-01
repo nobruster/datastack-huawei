@@ -4,15 +4,20 @@ services:
   # SeaweedFS Master node-1
   seaweedfs-master-1:
     image: chrislusf/seaweedfs:3.65
-    command: master -ip=node-1 -port=9333 -mdir=/data -peers=node-1:9333,node-2:9333,node-3:9333 -defaultReplication=010
+    command: master -ip=seaweedfs-master-1 -port=9333 -mdir=/data -peers=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -defaultReplication=010
     volumes:
       - seaweedfs-master-1:/data
     ports:
-      - "9333:9333"
-      - "19333:19333"
+      - target: 9333
+        published: 9333
+        mode: host
+      - target: 19333
+        published: 19333
+        mode: host
     networks:
       - datastack-net
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       placement:
         constraints:
@@ -24,15 +29,20 @@ services:
   # SeaweedFS Master node-2
   seaweedfs-master-2:
     image: chrislusf/seaweedfs:3.65
-    command: master -ip=node-2 -port=9333 -mdir=/data -peers=node-1:9333,node-2:9333,node-3:9333 -defaultReplication=010
+    command: master -ip=seaweedfs-master-2 -port=9333 -mdir=/data -peers=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -defaultReplication=010
     volumes:
       - seaweedfs-master-2:/data
     ports:
-      - "9333:9333"
-      - "19333:19333"
+      - target: 9333
+        published: 9333
+        mode: host
+      - target: 19333
+        published: 19333
+        mode: host
     networks:
       - datastack-net
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       placement:
         constraints:
@@ -44,15 +54,20 @@ services:
   # SeaweedFS Master node-3
   seaweedfs-master-3:
     image: chrislusf/seaweedfs:3.65
-    command: master -ip=node-3 -port=9333 -mdir=/data -peers=node-1:9333,node-2:9333,node-3:9333 -defaultReplication=010
+    command: master -ip=seaweedfs-master-3 -port=9333 -mdir=/data -peers=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -defaultReplication=010
     volumes:
       - seaweedfs-master-3:/data
     ports:
-      - "9333:9333"
-      - "19333:19333"
+      - target: 9333
+        published: 9333
+        mode: host
+      - target: 19333
+        published: 19333
+        mode: host
     networks:
       - datastack-net
     deploy:
+      endpoint_mode: dnsrr
       replicas: 1
       placement:
         constraints:
@@ -64,12 +79,16 @@ services:
   # SeaweedFS Volume node-1
   seaweedfs-volume-1:
     image: chrislusf/seaweedfs:3.65
-    command: volume -mserver=node-1:9333,node-2:9333,node-3:9333 -port=8080 -dir=/data -max=0 -dataCenter=dc1 -rack=rack1
+    command: volume -mserver=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8081 -dir=/data -max=0 -dataCenter=dc1 -rack=rack1
     volumes:
-      - /mnt/data/seaweedfs:/data
+      - /data/seaweedfs/volume:/data
     ports:
-      - "8080:8080"
-      - "18080:18080"
+      - target: 8081
+        published: 8081
+        mode: host
+      - target: 18080
+        published: 18080
+        mode: host
     networks:
       - datastack-net
     deploy:
@@ -84,12 +103,16 @@ services:
   # SeaweedFS Volume node-2
   seaweedfs-volume-2:
     image: chrislusf/seaweedfs:3.65
-    command: volume -mserver=node-1:9333,node-2:9333,node-3:9333 -port=8080 -dir=/data -max=0 -dataCenter=dc1 -rack=rack2
+    command: volume -mserver=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8081 -dir=/data -max=0 -dataCenter=dc1 -rack=rack2
     volumes:
-      - /mnt/data/seaweedfs:/data
+      - /data/seaweedfs/volume:/data
     ports:
-      - "8080:8080"
-      - "18080:18080"
+      - target: 8081
+        published: 8081
+        mode: host
+      - target: 18080
+        published: 18080
+        mode: host
     networks:
       - datastack-net
     deploy:
@@ -104,12 +127,16 @@ services:
   # SeaweedFS Volume node-3
   seaweedfs-volume-3:
     image: chrislusf/seaweedfs:3.65
-    command: volume -mserver=node-1:9333,node-2:9333,node-3:9333 -port=8080 -dir=/data -max=0 -dataCenter=dc1 -rack=rack3
+    command: volume -mserver=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8081 -dir=/data -max=0 -dataCenter=dc1 -rack=rack3
     volumes:
-      - /mnt/data/seaweedfs:/data
+      - /data/seaweedfs/volume:/data
     ports:
-      - "8080:8080"
-      - "18080:18080"
+      - target: 8081
+        published: 8081
+        mode: host
+      - target: 18080
+        published: 18080
+        mode: host
     networks:
       - datastack-net
     deploy:
@@ -124,12 +151,16 @@ services:
   # SeaweedFS Filer node-1 (S3 API porta 8333)
   seaweedfs-filer-1:
     image: chrislusf/seaweedfs:3.65
-    command: filer -master=node-1:9333,node-2:9333,node-3:9333 -port=8888 -s3 -s3.port=8333
+    command: filer -master=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8888 -s3 -s3.port=8333
     volumes:
       - seaweedfs-filer-1:/data
     ports:
-      - "8888:8888"
-      - "8333:8333"
+      - target: 8888
+        published: 8888
+        mode: host
+      - target: 8333
+        published: 8333
+        mode: host
     networks:
       - datastack-net
     deploy:
@@ -144,12 +175,16 @@ services:
   # SeaweedFS Filer node-2
   seaweedfs-filer-2:
     image: chrislusf/seaweedfs:3.65
-    command: filer -master=node-1:9333,node-2:9333,node-3:9333 -port=8888 -s3 -s3.port=8333
+    command: filer -master=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8888 -s3 -s3.port=8333
     volumes:
       - seaweedfs-filer-2:/data
     ports:
-      - "8888:8888"
-      - "8333:8333"
+      - target: 8888
+        published: 8888
+        mode: host
+      - target: 8333
+        published: 8333
+        mode: host
     networks:
       - datastack-net
     deploy:
@@ -164,12 +199,16 @@ services:
   # SeaweedFS Filer node-3
   seaweedfs-filer-3:
     image: chrislusf/seaweedfs:3.65
-    command: filer -master=node-1:9333,node-2:9333,node-3:9333 -port=8888 -s3 -s3.port=8333
+    command: filer -master=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8888 -s3 -s3.port=8333
     volumes:
       - seaweedfs-filer-3:/data
     ports:
-      - "8888:8888"
-      - "8333:8333"
+      - target: 8888
+        published: 8888
+        mode: host
+      - target: 8333
+        published: 8333
+        mode: host
     networks:
       - datastack-net
     deploy:

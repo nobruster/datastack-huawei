@@ -39,7 +39,8 @@ reflecting execution order, not file type:
 02-swarm-init.sh       node-1 only: docker swarm init, prints the MANAGER join token
                        -> run `docker swarm join --token <TOKEN> <ip-node-1>:2377` on node-2 and node-3
 03-swarm-networks.sh   node-1 only: creates the `datastack-net` overlay network, sets node labels
-04-postgresql.sh       node-1 only: installs PostgreSQL 15 natively (not containerized), creates hive/superset DBs
+04-postgresql.sh       node-1 only: adds the PGDG apt repo (Ubuntu 22.04 default repos only have PG14),
+                       installs PostgreSQL 15 natively (not containerized), creates hive/superset DBs
 05-seaweedfs-stack.yml stack: SeaweedFS masters/volumes/filers (S3 storage layer)
 06-datastack.yml       stack: Hive Metastore + Spark + Trino
 07-sync-config.sh      node-1 only: rsyncs config/ to node-2 and node-3 (see "Bind mounts" below)
@@ -69,13 +70,37 @@ These have been sources of real bugs before — check both sides when touching e
   why `07-sync-config.sh` exists: it rsyncs `/opt/datastack/config/` to node-2 and node-3 after any change
   on node-1, before deploying or redeploying `06-datastack.yml`/`08-apps-stack.yml`.
 
+- **Swarmpit service names must be exactly `app`, `db`, `influxdb`, `agent` — no prefix.** The
+  `swarmpit/agent` image has its event/healthcheck endpoints hardcoded to `http://app:8080/...`. Rename a
+  service (e.g. to `swarmpit-app`) and the agent sits forever at `Waiting for Swarmpit...`, never sends
+  stats, and **nothing logs an error anywhere** — the only symptom is an empty dashboard. This is the
+  single highest-value thing to check first if Swarmpit stats stop working after editing the stack file.
 - **Swarmpit app is pinned to `1.10`, not `:latest`.** `swarmpit/swarmpit:latest` (from `1.11-SNAPSHOT`
   onward, commit `d78d3e43` "harden auth") requires authentication on `POST /events`. The official
   `swarmpit/agent` image on Docker Hub hasn't been updated since 2019 and never sends an auth token on that
   call, so with `:latest` the agent's requests get silently rejected (`401 Unauthorized`) and the
   CPU/Memory/Disk dashboard graphs stay empty forever — no error surfaces anywhere except in the raw HTTP
-  response if you capture traffic. `1.10` is the last tag before that change. Don't bump `swarmpit-app` past
-  `1.10` unless the agent has also been updated to authenticate.
+  response if you capture traffic. `1.10` is the last tag before that change. Don't bump the `app` service
+  past `1.10` unless the agent has also been updated to authenticate.
+- **Swarmpit agent needs `DOCKER_API_VERSION=1.44`.** The installed engine (29.6.1) requires API >= 1.40;
+  older values (e.g. `1.35`, from stale examples) crash-loop the agent (`panic: Event collector is broken`).
+- **Same-port replicated/global services need `mode: host` on their published ports.** Docker Swarm's
+  default ingress/routing-mesh publishing is a cluster-wide singleton per port — two services publishing
+  the same port (even pinned to different nodes) fail with `port already in use ... as an ingress port`.
+  This hit `05-seaweedfs-stack.yml` (3x master/volume/filer, one per node, same ports each) and
+  `08-apps-stack.yml`'s `portainer-agent` (`mode: global`). Fix: publish with the long syntax and
+  `mode: host` instead of the `"host:container"` shorthand.
+- **SeaweedFS command flags must reference Swarm service DNS names, not VM hostnames.** `-ip=`, `-peers=`,
+  `-mserver=`, `-master=` in `05-seaweedfs-stack.yml` need `seaweedfs-master-{1,2,3}`, not `node-{1,2,3}` —
+  the overlay network's embedded DNS only resolves service names. Additionally, each master service needs
+  `endpoint_mode: dnsrr` in its `deploy:` block: with the default `vip` mode, resolving a master's own
+  service name (for its `-ip=` bind) returns the service VIP instead of the task's real IP, and
+  `bind: cannot assign requested address` follows. SeaweedFS Volume's data dir bind-mounts to
+  `/data/seaweedfs/volume` (created by `01-base-setup.sh`, on the 3TB disk) — not `/mnt/data/seaweedfs`,
+  which is never created.
+- **SeaweedFS Volume uses port 8081, not SeaweedFS's documented default 8080** — 8080 collides with Trino
+  Coordinator when both land on node-1 (both use `mode: host`, so it's a real same-node conflict, not just
+  a same-service-replica one).
 
 ## Placeholder secrets
 

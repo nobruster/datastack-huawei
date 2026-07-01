@@ -4,6 +4,16 @@ set -e
 
 echo "=== Instalando PostgreSQL 15 no node-1 ==="
 
+# Ubuntu 22.04 (jammy) so tem PostgreSQL 14 nos repositorios padrao.
+# Adiciona o repositorio oficial PGDG para instalar a versao 15.
+export DEBIAN_FRONTEND=noninteractive
+if ! apt-cache show postgresql-15 >/dev/null 2>&1; then
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list
+    apt-get update
+fi
+
 apt-get install -y postgresql-15 postgresql-client-15
 
 # Move dados para o disco de dados

@@ -32,7 +32,7 @@ Stack de processamento de dados rodando em **Docker Swarm** na **Huawei Cloud HC
 | Apache Superset | 3.1.3 | 8088 | node-1 |
 | Redis | 7 | 6379 | node-1 |
 | SeaweedFS | 3.65 | 9333/8333/8888 | todos |
-| Portainer | 2.20.3 | 9000 | node-1 |
+| Portainer | 2.20.3 | 9443 | node-1 |
 | Swarmpit | 1.10 (app) / latest (agent) | 888 | node-1 (app), todos (agent) |
 
 ## Estrutura do Repositório
@@ -85,17 +85,24 @@ bash scripts/07-sync-config.sh
 bash scripts/09-deploy-all.sh
 ```
 
-## Swarmpit - versão do app fixada em 1.10 (não usar :latest)
+## Swarmpit - detalhes importantes
 
-`swarmpit/swarmpit:latest` (a partir da `1.11-SNAPSHOT`, commit `d78d3e43` "harden auth", abril/2026) passou
-a exigir autenticação em `POST /events`. O `swarmpit/agent` oficial no Docker Hub está parado desde 2019 e
-nunca envia token nessa chamada — resultado: os cards de CPU/Memória/Disco no dashboard ficam presos em
-"Loading" porque o InfluxDB nunca recebe dado (confirmado via captura de tráfego: agent recebia `401
-Unauthorized {"error":"Authentication failed"}` do app).
+**Nomes de serviço são obrigatórios: `app`, `db`, `influxdb`, `agent` (sem prefixo).** O `swarmpit/agent`
+tem o endpoint de eventos/healthcheck **hardcoded** para `http://app:8080/...`. Se os serviços forem
+nomeados diferente (ex: `swarmpit-app`), o agent fica preso para sempre em `Waiting for Swarmpit...`, nunca
+envia stats, e **nenhum erro aparece em lugar nenhum** — o dashboard só fica com CPU/Memória/Disco em
+"Loading" silenciosamente. `stacks/10-swarmpit-stack.yml` já usa os nomes corretos; não renomeie os
+serviços nesse arquivo.
 
-Fix aplicado em `stacks/10-swarmpit-stack.yml`: `swarmpit-app` fixado em `swarmpit/swarmpit:1.10` (véspera da
-mudança), que ainda trata `POST /events` como `any-access`. Manter fixado enquanto o agent não for atualizado
-upstream — não subir para `:latest` sem antes checar se o agent passou a autenticar.
+**Versão do app fixada em `1.10` (não usar `:latest`).** `swarmpit/swarmpit:latest` (a partir da
+`1.11-SNAPSHOT`, commit `d78d3e43` "harden auth", abril/2026) passou a exigir autenticação em `POST
+/events`. O `swarmpit/agent` oficial no Docker Hub está parado desde 2019 e nunca envia token nessa
+chamada — resultado: `401 Unauthorized {"error":"Authentication failed"}` (confirmado via captura de
+tráfego) e o mesmo sintoma de dashboard vazio acima. `1.10` é a véspera da mudança, ainda trata `POST
+/events` como acesso livre. Não subir para `:latest` sem checar se o agent passou a autenticar.
+
+**`DOCKER_API_VERSION=1.44` no agent.** O engine instalado (29.6.1) exige API mínima 1.40; a versão antiga
+usada em exemplos legados (`1.35`) faz o agent entrar em crash-loop (`panic: Event collector is broken`).
 
 ## Labels dos nós (Swarm)
 
@@ -121,7 +128,43 @@ Gateway > regra SNAT). Não usar node-1 como NAT improvisado via iptables/`ip ro
 
 **Se algum nó específico (ex: node-3) continuar sem egress mesmo com o NAT Gateway ativo:** compare os
 Security Groups dos nós — um nó com Security Group diferente/mais restritivo pode ficar de fora mesmo com a
-regra SNAT correta na subnet inteira.
+regra SNAT correta na subnet inteira. Nesse caso, serviços `global` (que precisam rodar nos 3 nós, ex:
+`swarmpit_agent`, `portainer-agent`) ficam presos com réplica faltando por falha de `docker pull` nesse nó
+especificamente — dá pra contornar levando a imagem via `docker save` no node-1 + `scp` + `docker load` +
+`docker tag` no nó afetado, mas isso é só paliativo até o Security Group ser corrigido.
+
+**`04-postgresql.sh` falha com "Unable to locate package postgresql-15".** Ubuntu 22.04 (jammy) só tem
+PostgreSQL 14 nos repositórios padrão. O script já adiciona o repositório oficial PGDG
+(`apt.postgresql.org`) automaticamente antes de instalar — se isso ainda falhar, confirme que o node tem
+acesso a `apt.postgresql.org` (mesma questão de NAT Gateway acima).
+
+**SeaweedFS: portas de serviços replicados (master/volume/filer, 3 réplicas cada) em modo `ingress`
+colidem entre si.** Publicar a mesma porta (`"9333:9333"`, etc) em 3 serviços diferentes falha com `port
+already in use ... as an ingress port`, mesmo cada um estando pinado a um nó diferente — portas publicadas
+no modo padrão do Swarm são globais ao cluster, não por nó. `stacks/05-seaweedfs-stack.yml` já publica
+essas portas com `mode: host` (liga direto na interface do nó, sem passar pela routing mesh).
+
+**SeaweedFS Volume (porta 8080) colide com Trino Coordinator (porta 8080) no node-1.** Ambos os serviços
+podem cair no mesmo nó com `mode: host`; a stack já usa **8081** para o SeaweedFS Volume (`-port=8081` no
+comando e no mapeamento de porta) para evitar o conflito.
+
+**SeaweedFS: comandos usavam hostnames das VMs (`node-1`, `node-2`, `node-3`) em `-ip=`, `-peers=`,
+`-mserver=`, `-master=`.** A rede overlay do Swarm só resolve nomes de **serviço** via DNS interno
+(`seaweedfs-master-1`, etc) — hostnames de VM não resolvem lá dentro, causando `lookup node-1: no such
+host` e crash-loop do master. A stack já usa os nomes de serviço corretos.
+
+**SeaweedFS Master: `bind: cannot assign requested address` mesmo com o nome de serviço certo.** O master
+faz `-ip=<proprio-nome-de-servico>` e tenta abrir socket nesse endereço — mas a resolução DNS padrão do
+Swarm (`endpoint_mode: vip`) devolve o **VIP do serviço**, não o IP real da tarefa, e não dá pra fazer bind
+nele. Os 3 serviços de master já têm `endpoint_mode: dnsrr` no `deploy:`, que faz o DNS devolver o IP real
+da tarefa.
+
+**SeaweedFS Volume: `bind source path does not exist: /mnt/data/seaweedfs`.** A stack original apontava
+para um caminho que nunca é criado; o disco de 3TB real fica em `/data/seaweedfs/volume` (criado por
+`01-base-setup.sh`). Já corrigido no bind mount.
+
+**Portainer Agent (modo `global`) com o mesmo bug de porta em `ingress` do SeaweedFS.** Mesma causa e
+mesmo fix: porta 9001 publicada com `mode: host`.
 
 ## Alta disponibilidade
 
@@ -132,7 +175,7 @@ regra SNAT correta na subnet inteira.
 
 | Servico | URL |
 |---|---|
-| Portainer | http://<ip-node-1>:9000 |
+| Portainer | https://<ip-node-1>:9443 |
 | Swarmpit | http://<ip-node-1>:888 |
 | Spark UI | http://<ip-node-1>:8090 |
 | Trino UI | http://<ip-node-1>:8080 |

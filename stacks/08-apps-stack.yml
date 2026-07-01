@@ -137,7 +137,9 @@ services:
     environment:
       - AGENT_CLUSTER_ADDR=tasks.portainer-agent
     ports:
-      - "9001:9001"
+      - target: 9001
+        published: 9001
+        mode: host
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/docker/volumes:/var/lib/docker/volumes
