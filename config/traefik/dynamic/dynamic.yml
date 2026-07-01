@@ -1,0 +1,39 @@
+# Traefik dynamic config: TLS, middlewares, routers e services.
+# Hostnames via sslip.io (<algo>.<eip>.sslip.io -> EIP, sem DNS proprio).
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/tls/ingress.crt
+        keyFile: /etc/traefik/tls/ingress.key
+  certificates:
+    - certFile: /etc/traefik/tls/ingress.crt
+      keyFile: /etc/traefik/tls/ingress.key
+
+http:
+  routers:
+    # --- Keycloak (publico, sem auth) ---
+    keycloak:
+      rule: "Host(`keycloak.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: keycloak
+      tls: {}
+
+    # --- SeaweedFS Admin (protegido por SSO). O host inteiro vai pro
+    #     oauth2-proxy inline, que faz login + proxy pro admin (inclui os
+    #     endpoints /oauth2/* de callback/login no proprio host). ---
+    seaweedfs-admin:
+      rule: "Host(`seaweedfs.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: sso-seaweedfs
+      tls: {}
+
+  services:
+    keycloak:
+      loadBalancer:
+        servers:
+          - url: "http://keycloak:8080"
+    sso-seaweedfs:
+      loadBalancer:
+        servers:
+          - url: "http://sso-seaweedfs:4180"

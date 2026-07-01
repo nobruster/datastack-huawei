@@ -1,0 +1,118 @@
+version: "3.8"
+
+# =============================================================================
+# INGRESS + SSO - Traefik (ingress/TLS) + Keycloak (IdP) + oauth2-proxy (forward-auth)
+# Ponto de entrada unico do cluster. Roteamento por hostname via sslip.io
+# (<servico>.<eip>.sslip.io resolve pro EIP sem DNS proprio).
+# Traefik termina TLS (cert self-signed) e aplica SSO nos dashboards.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Traefik - ingress, publica 80/443, roteamento via file provider
+  # ---------------------------------------------------------------------------
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --configfile=/etc/traefik/traefik.yml
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /opt/datastack/config/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - /opt/datastack/config/traefik/dynamic:/etc/traefik/dynamic:ro
+      - /opt/datastack/config/traefik/tls:/etc/traefik/tls:ro
+    networks:
+      - datastack-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+
+  # ---------------------------------------------------------------------------
+  # Keycloak - Identity Provider (OIDC). Backend no Postgres (db keycloak).
+  # UI: https://keycloak.<eip>.sslip.io  (admin master: admin)
+  # Importa o realm 'datastack' (client oauth2-proxy + usuario admin) no boot.
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    command: start --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak_password_CHANGE_ME
+      KC_HOSTNAME: https://keycloak.<eip>.sslip.io
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: keycloak_admin_CHANGE_ME
+    volumes:
+      - /opt/datastack/config/keycloak/realm-datastack.json:/opt/keycloak/data/import/realm-datastack.json:ro
+    networks:
+      - datastack-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # SSO do SeaweedFS Admin - oauth2-proxy INLINE (proxy reverso do admin).
+  # Redireciona quem nao tem sessao pro login do Keycloak (UX correta) e so
+  # entao encaminha pro upstream. Uma instancia por servico protegido; todas
+  # compartilham cookie-domain/secret/client -> a sessao (cookie _oauth2_proxy
+  # no dominio .sslip.io) e comum = SSO (login unico entre os dashboards).
+  # Hairpin: o container nao alcanca o EIP, entao redeem/jwks usam a URL
+  # INTERNA (http://keycloak:8080); so o login (browser) usa a URL externa.
+  # ---------------------------------------------------------------------------
+  sso-seaweedfs:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    command:
+      - --http-address=0.0.0.0:4180
+      - --reverse-proxy=true
+      - --provider=oidc
+      - --skip-oidc-discovery=true
+      - --oidc-issuer-url=https://keycloak.<eip>.sslip.io/realms/datastack
+      - --login-url=https://keycloak.<eip>.sslip.io/realms/datastack/protocol/openid-connect/auth
+      - --redeem-url=http://keycloak:8080/realms/datastack/protocol/openid-connect/token
+      - --oidc-jwks-url=http://keycloak:8080/realms/datastack/protocol/openid-connect/certs
+      - --client-id=oauth2-proxy
+      - --client-secret=oauth2-proxy-secret-CHANGE-ME
+      - --redirect-url=https://seaweedfs.<eip>.sslip.io/oauth2/callback
+      - --cookie-domain=.<eip>.sslip.io
+      - --whitelist-domain=.<eip>.sslip.io
+      - --cookie-secret=datastack_sso_cookie_secret_32by
+      - --cookie-secure=true
+      - --email-domain=*
+      - --skip-provider-button=true
+      - --upstream=http://seaweedfs-admin:23646
+    networks:
+      - datastack-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+
+networks:
+  datastack-net:
+    external: true

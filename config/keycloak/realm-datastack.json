@@ -1,0 +1,49 @@
+{
+  "realm": "datastack",
+  "enabled": true,
+  "sslRequired": "none",
+  "loginTheme": "keycloak",
+  "clients": [
+    {
+      "clientId": "oauth2-proxy",
+      "name": "oauth2-proxy (Traefik forward-auth)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "secret": "oauth2-proxy-secret-CHANGE-ME",
+      "redirectUris": [
+        "https://*.<eip>.sslip.io/oauth2/callback"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "defaultClientScopes": [
+        "openid",
+        "email",
+        "profile"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin@datastack.local",
+      "firstName": "Admin",
+      "lastName": "Datastack",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "datastack-user-password-CHANGE-ME",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "user"
+      ]
+    }
+  ]
+}
