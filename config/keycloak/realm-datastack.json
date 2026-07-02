@@ -14,10 +14,65 @@
       "directAccessGrantsEnabled": false,
       "secret": "oauth2-proxy-secret-CHANGE-ME",
       "redirectUris": [
-        "https://*.<eip>.sslip.io/oauth2/callback"
+        "https://*.<eip>.sslip.io/oauth2/callback",
+        "https://seaweedfs.<eip>.sslip.io/oauth2/callback"
       ],
       "webOrigins": [
         "+"
+      ],
+      "defaultClientScopes": [
+        "openid",
+        "email",
+        "profile"
+      ]
+    },
+    {
+      "clientId": "trino",
+      "name": "Trino Coordinator",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "secret": "trino-oidc-secret-CHANGE-ME",
+      "redirectUris": [
+        "https://trino.<eip>.sslip.io/oauth2/callback"
+      ],
+      "webOrigins": [
+        "https://trino.<eip>.sslip.io"
+      ],
+      "defaultClientScopes": [
+        "openid",
+        "email",
+        "profile"
+      ],
+      "protocolMappers": [
+        {
+          "name": "trino-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "trino",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "jupyterhub",
+      "name": "JupyterHub",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "secret": "jupyterhub-oidc-secret-CHANGE-ME",
+      "redirectUris": [
+        "https://jupyter.<eip>.sslip.io/hub/oauth_callback"
+      ],
+      "webOrigins": [
+        "https://jupyter.<eip>.sslip.io"
       ],
       "defaultClientScopes": [
         "openid",
@@ -34,6 +89,24 @@
       "email": "admin@datastack.local",
       "firstName": "Admin",
       "lastName": "Datastack",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "datastack-user-password-CHANGE-ME",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "user"
+      ]
+    },
+    {
+      "username": "superadmin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "nobruster@gmail.com",
+      "firstName": "Super",
+      "lastName": "Admin",
       "credentials": [
         {
           "type": "password",

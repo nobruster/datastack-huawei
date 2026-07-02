@@ -1,65 +1,84 @@
 # =============================================================================
 # JupyterHub Configuration
-# Multi-user Jupyter Notebook server
-# UI: http://<ip-node-1>:8000
+# Multi-user Jupyter Notebook server com SSO (Keycloak realm 'datastack')
+# UI publica: https://jupyter.<eip>.sslip.io  (via Traefik/443)
 # =============================================================================
 
 import os
-import sys
 
-# Configuracao basica
-c.JupyterHub.ip = "0.0.0.0"
-c.JupyterHub.port = 8000
+# ---------------------------------------------------------------------------
+# Basico
+# ---------------------------------------------------------------------------
 c.JupyterHub.bind_url = "http://:8000"
+c.JupyterHub.log_level = "INFO"
 
-# Spawner - usa Docker para criar notebooks por usuario
+# DockerSpawner spawna cada notebook como um container standalone na overlay
+# 'datastack-net' (attachable). Por isso o Hub precisa anunciar um endereco
+# que esses containers alcancem: o proprio nome de servico Swarm 'jupyterhub'.
+c.JupyterHub.hub_ip = "0.0.0.0"
+c.JupyterHub.hub_connect_ip = "jupyterhub"
+
+# ---------------------------------------------------------------------------
+# Autenticacao: OIDC via Keycloak (GenericOAuthenticator)
+# Hairpin (igual Trino/oauth2-proxy): o browser usa a URL EXTERNA (authorize);
+# o back-channel (token/userinfo) usa http://keycloak:8080 INTERNO -> o
+# container do Hub nao alcanca o EIP, mas alcanca o servico keycloak.
+# ---------------------------------------------------------------------------
+from oauthenticator.generic import GenericOAuthenticator
+
+c.JupyterHub.authenticator_class = GenericOAuthenticator
+# Vai direto pro Keycloak (pula a pagina com botao "Sign in with Keycloak")
+c.Authenticator.auto_login = True
+
+_REALM_EXT = "https://keycloak.<eip>.sslip.io/realms/datastack"
+_REALM_INT = "http://keycloak:8080/realms/datastack"
+
+c.GenericOAuthenticator.client_id = "jupyterhub"
+c.GenericOAuthenticator.client_secret = "jupyterhub-oidc-secret-CHANGE-ME"
+c.GenericOAuthenticator.oauth_callback_url = (
+    "https://jupyter.<eip>.sslip.io/hub/oauth_callback"
+)
+c.GenericOAuthenticator.authorize_url = _REALM_EXT + "/protocol/openid-connect/auth"
+c.GenericOAuthenticator.token_url = _REALM_INT + "/protocol/openid-connect/token"
+c.GenericOAuthenticator.userdata_url = _REALM_INT + "/protocol/openid-connect/userinfo"
+c.GenericOAuthenticator.logout_redirect_url = (
+    _REALM_EXT + "/protocol/openid-connect/logout"
+)
+c.GenericOAuthenticator.login_service = "Keycloak"
+c.GenericOAuthenticator.username_claim = "preferred_username"
+c.GenericOAuthenticator.scope = ["openid", "email", "profile"]
+
+# Qualquer usuario do realm entra; estes viram admin do Hub.
+c.GenericOAuthenticator.allow_all = True
+c.GenericOAuthenticator.admin_users = {"admin", "superadmin"}
+
+# ---------------------------------------------------------------------------
+# Spawner: um container por usuario (imagem com PySpark)
+# ---------------------------------------------------------------------------
 c.JupyterHub.spawner_class = "dockerspawner.DockerSpawner"
-
-# Imagem do notebook com PySpark pre-instalado
 c.DockerSpawner.image = "jupyter/pyspark-notebook:spark-3.5.0"
 c.DockerSpawner.remove = True
 c.DockerSpawner.debug = True
 
-# Rede Docker
+# Rede: usar nomes de servico Swarm (nao IP/hostname de VM)
 c.DockerSpawner.network_name = "datastack-net"
 c.DockerSpawner.use_internal_ip = True
 
-# Variaveis de ambiente para Spark
-# Nomes de servico do Swarm (nao IP/hostname de VM: nao resolvem/roteiam de
-# dentro de um container na rede overlay).
 c.DockerSpawner.environment = {
     "SPARK_MASTER": "spark://spark-master:7077",
     "SPARK_HOME": "/usr/local/spark",
     "HADOOP_CONF_DIR": "/opt/hadoop/conf",
-    "AWS_ACCESS_KEY_ID": "",
-    "AWS_SECRET_ACCESS_KEY": "",
     "AWS_ENDPOINT_URL": "http://seaweedfs-filer-1:8333",
 }
 
-# Volumes persistentes por usuario
+# Volume persistente por usuario
 c.DockerSpawner.volumes = {
     "jupyterhub-user-{username}": "/home/jovyan/work",
 }
 
-# Recursos
 c.DockerSpawner.cpu_limit = 8
 c.DockerSpawner.mem_limit = "32G"
 
-# Autenticacao - PAM (usuario do sistema)
-# Para producao, considere usar OAuth/LDAP
-c.JupyterHub.authenticator_class = "nativeauthenticator.NativeAuthenticator"
-c.NativeAuthenticator.open_signup = False
-
-# Admin users (altere conforme necessario)
-c.Authenticator.admin_users = {"admin"}
-c.Authenticator.allowed_users = {"admin", "analyst", "engineer"}
-
-# Timeout
-c.Spawner.http_timeout = 120
-c.Spawner.start_timeout = 120
-
-# Servico de proxy
-c.ConfigurableHTTPProxy.should_start = True
-
-# Log
-c.JupyterHub.log_level = "INFO"
+# Timeouts (primeiro spawn pode puxar imagem)
+c.Spawner.http_timeout = 180
+c.Spawner.start_timeout = 300

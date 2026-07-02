@@ -31,7 +31,10 @@ services:
   # JUPYTERHUB
   # =============================================
   jupyterhub:
-    image: jupyterhub/jupyterhub:4.1
+    # Imagem custom (build local no node-1): jupyterhub 4.1 + oauthenticator +
+    # dockerspawner. Ver /tmp/jhbuild/Dockerfile. Nao esta em registry, entao o
+    # servico esta pinado no node-1 (onde a imagem existe).
+    image: datastack/jupyterhub:4.1-oidc
     environment:
       - JUPYTERHUB_ADMIN=admin
     ports:
@@ -39,6 +42,7 @@ services:
     volumes:
       - jupyterhub-data:/srv/jupyterhub
       - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/datastack/config/jupyterhub/jupyterhub_config.py:/srv/jupyterhub/jupyterhub_config.py:ro
     networks:
       - datastack-net
     deploy:

@@ -28,6 +28,31 @@ http:
       service: sso-seaweedfs
       tls: {}
 
+    # --- Trino (auth OIDC NATIVA no proprio Trino, nao via oauth2-proxy).
+    #     Traefik so termina TLS e encaminha; o Trino faz o fluxo OAuth2 com
+    #     o Keycloak (precisa de X-Forwarded-Proto=https -> process-forwarded). ---
+    trino:
+      rule: "Host(`trino.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: trino
+      tls: {}
+
+    # --- JupyterHub (auth OIDC nativa via GenericOAuthenticator no Hub). ---
+    jupyter:
+      rule: "Host(`jupyter.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: jupyter
+      tls: {}
+
+    # --- Dashboard do proprio Traefik (api@internal = read-only: mostra
+    #     routers/services/middlewares, nao altera config). Acesso restrito
+    #     pelo Security Group (origem unica). Dashboard fica em /dashboard/. ---
+    traefik-dashboard:
+      rule: "Host(`traefik.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: api@internal
+      tls: {}
+
   services:
     keycloak:
       loadBalancer:
@@ -37,3 +62,11 @@ http:
       loadBalancer:
         servers:
           - url: "http://sso-seaweedfs:4180"
+    trino:
+      loadBalancer:
+        servers:
+          - url: "http://trino-coordinator:8080"
+    jupyter:
+      loadBalancer:
+        servers:
+          - url: "http://jupyterhub:8000"
