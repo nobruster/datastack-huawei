@@ -199,14 +199,30 @@ explicitly deferred as a separate, larger project — don't add it unprompted.
 Spark writes the landing/bronze/prata/ouro Delta tables straight to `s3a://...` paths (`.write.save(path)`,
 no `saveAsTable`), so they were never registered in the Hive Metastore and didn't show up as SQL tables
 anywhere. Added `config/trino/{coordinator,worker}/catalog/delta.properties` (`connector.name=delta_lake`,
-same `hive.metastore.uri` + `hive.s3.*` as the `hive` catalog, plus
-`delta.register-table-procedure.enabled=true` — the `register_table` procedure that attaches an
-already-existing Delta table by path is off by default). Also found and fixed: `hive.properties` on both
-coordinator and worker had **blank** `hive.s3.aws-access-key`/`aws-secret-key` — it could never have
-authenticated against SeaweedFS S3 (which requires signed requests). Filled with the same
-`seaweedfs_access_CHANGE_ME`/`seaweedfs_secret_CHANGE_ME` Spark uses. A new/changed catalog `.properties`
-file needs `docker service update --force datastack_trino-coordinator` (and workers) to be picked up — Trino
-here runs static catalog management, it doesn't hot-reload the catalog directory.
+same `hive.metastore.uri` as the `hive` catalog, plus `delta.register-table-procedure.enabled=true` — the
+`register_table` procedure that attaches an already-existing Delta table by path is off by default). A
+new/changed catalog `.properties` file needs `docker service update --force datastack_trino-coordinator`
+(and workers) to be picked up — Trino here runs static catalog management, it doesn't hot-reload the catalog
+directory.
+
+**S3 config must use the native filesystem (`fs.native-s3.enabled` + `s3.*`), not the legacy
+`hive.s3.*` properties** — found the hard way (two errors in sequence testing `CREATE SCHEMA`):
+1. `hive.s3.*` with blank keys → auth never worked (fixed the blank keys first, seemed plausible).
+2. Still failed: `ClassNotFoundException: org.apache.hadoop.fs.s3a.S3AFileSystem`. This Trino 435 image's
+   `hive` **and** `delta-lake` plugins both ship only `trino-filesystem-s3-435.jar` (Trino's own native S3
+   client) — no `hadoop-aws` jar, so the legacy Hadoop-backed `hive.s3.*` filesystem can never work
+   regardless of credentials. **Both catalogs never worked at all before this fix**, not just the blank-key
+   half of it. Correct config for both `hive.properties` and `delta.properties`:
+   ```
+   fs.native-s3.enabled=true
+   s3.endpoint=http://seaweedfs-filer-1:8333
+   s3.region=us-east-1
+   s3.path-style-access=true
+   s3.aws-access-key=seaweedfs_access_CHANGE_ME
+   s3.aws-secret-key=seaweedfs_secret_CHANGE_ME
+   ```
+   (`s3.region` is required by the native client even against a non-AWS S3-compatible endpoint; any value
+   works since SeaweedFS ignores it.)
 
 To attach the existing gold tables (or any Delta table under `s3a://<bucket>/...`) into the `delta` catalog,
 run in Trino (e.g. from DBeaver once OAuth2-authenticated — there's no headless/service-account path to
