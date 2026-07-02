@@ -31,14 +31,14 @@ container-a-container via nome de serviço do Swarm.
 | Apache Spark Master | 3.5 | 🌐 8090 (UI), 7077 (RPC) | node-1 | datastack |
 | Apache Spark Worker | 3.5 | 🌐 8091 (node-2), 8092 (node-3) | node-2, node-3 | datastack |
 | Spark History Server | 3.5 | 🌐 18081 | node-1 | datastack |
-| Trino Coordinator | 435 | 🌐 8080 | node-1 | datastack |
+| Trino Coordinator | 435 | 🌐 8080 (direto) / 🌐 443 via Traefik+OAuth2 | node-1 | datastack |
 | Trino Worker | 435 | 8080 (interno) | node-2, node-3 | datastack |
 | SeaweedFS Master | 3.65 | 🌐 9333, 19333 | todos | seaweedfs |
 | SeaweedFS Volume | 3.65 | 8081, 18080 | todos | seaweedfs |
 | SeaweedFS Filer (+ S3 API) | 3.65 | 🌐 8888, 🌐 8333 | todos | seaweedfs |
-| SeaweedFS Admin (dashboard) | 3.95 | 🌐 23646 | node-1 | seaweedfs |
+| SeaweedFS Admin (dashboard) | 3.95 | 🌐 23646, 🌐 443 via Traefik+SSO | node-1 | seaweedfs |
 | Redis | 7 | 6379 | node-1 | apps |
-| JupyterHub | 4.1 | 🌐 8000 | node-1 | apps |
+| JupyterHub | 4.1 | 🌐 8000, 🌐 443 via Traefik | node-1 | apps |
 | Apache Superset | 3.1.3 | 🌐 8088 | node-1 | apps |
 | Portainer | 2.20.3 | 🌐 9000 (HTTP), 🌐 9443 (HTTPS) | node-1 | apps |
 | Portainer Agent | 2.20.3 | 9001 | todos | apps |
@@ -46,33 +46,94 @@ container-a-container via nome de serviço do Swarm.
 | Swarmpit Agent | latest | - | todos | swarmpit |
 | Swarmpit DB (CouchDB) | 2.3.0 | 5984 (interno) | node-1 | swarmpit |
 | Swarmpit InfluxDB | 1.8 | 8086 (interno) | node-1 | swarmpit |
+| Traefik (ingress) | v3.1 | 🌐 80, 🌐 443 | node-1 | ingress |
+| Keycloak (IdP/SSO) | 25.0 | 8080 (interno, via Traefik) | node-1 | ingress |
+| oauth2-proxy (SSO do SeaweedFS Admin) | v7.6.0 | 4180 (interno, via Traefik) | node-1 | ingress |
 
 ## Estrutura do Repositório
 
 ```
 datastack-huawei/
 ├── README.md
+├── CLAUDE.md                     # Guia detalhado de arquitetura, invariantes e troubleshooting
 ├── scripts/
 │   ├── 00-ssh-setup.sh           # Configura SSH sem senha do node-1 para node-2/node-3
 │   ├── 01-base-setup.sh          # Setup base (Docker, disco, hosts) - todos os nos
 │   ├── 02-swarm-init.sh          # Inicializa Docker Swarm no node-1
 │   ├── 03-swarm-networks.sh      # Cria rede overlay e labels (role, name)
 │   ├── 07-sync-config.sh         # Sincroniza config/ para node-2/node-3 (bind mounts)
-│   └── 09-deploy-all.sh          # Deploy completo de todas as stacks
+│   ├── 09-deploy-all.sh          # Deploy completo de todas as stacks
+│   └── run-spark-job.sh          # Roda um job de jobs/ no container spark-master (ver uso abaixo)
 ├── stacks/
 │   ├── 05-seaweedfs-stack.yml    # SeaweedFS distribuido (Masters + Volumes + Filers)
-│   ├── 06-datastack.yml          # PostgreSQL + Hive + Spark (+ History Server) + Trino
+│   ├── 06-datastack.yml          # PostgreSQL + Hive Metastore + Spark (+ History Server) + Trino
 │   ├── 08-apps-stack.yml         # Redis + JupyterHub + Superset + Portainer
-│   └── 10-swarmpit-stack.yml     # Swarmpit (gerenciamento do Swarm)
+│   ├── 10-swarmpit-stack.yml     # Swarmpit (gerenciamento do Swarm)
+│   └── 11-ingress.yml            # Traefik (ingress/TLS) + Keycloak (SSO) + oauth2-proxy
+├── jobs/                         # Pipeline medallion (PySpark), landing -> bronze -> silver -> gold
+│   ├── landing-beneficios-v3.py  # Ingestao raw (staging s3a:// + magic committer)
+│   ├── bronze-beneficios-v2.py   # Tipagem/Delta Lake sobre a landing
+│   ├── silver-beneficios-v2.py   # Limpeza, parsing, enriquecimento
+│   └── gold-beneficios-v2.py     # Tabelas fato/KPI prontas para BI (fat_uf, fat_especie, fat_banco, kpis)
 └── config/
     ├── postgres/
     │   └── init.sql              # Cria databases/usuarios hive e superset (1a inicializacao)
+    ├── hive/
+    │   └── core-site.xml         # fs.s3a.* do Hive Metastore (suporte a S3A/SeaweedFS)
     ├── trino/
-    │   ├── coordinator/          # Configuracoes do Trino Coordinator (inclui catalog/ hive + postgresql)
-    │   └── worker/               # Configuracoes dos Trino Workers (inclui catalog/ hive + postgresql)
-    └── spark/
-        └── spark-defaults.conf   # Configuracoes do Spark (S3/SeaweedFS)
+    │   ├── coordinator/          # Config do Trino Coordinator (catalog/ hive + postgresql + delta)
+    │   └── worker/               # Config dos Trino Workers (mesmos catalogos do coordinator)
+    ├── spark/
+    │   ├── spark-defaults.conf   # Configuracoes do Spark (S3A/SeaweedFS, magic committer)
+    │   └── jars/                 # spark-hadoop-cloud (commiter S3A magic, nao vem na imagem bitnami)
+    ├── seaweedfs/                # s3config.json (identidades S3), security.toml, tls/ (admin)
+    ├── superset/
+    │   └── superset_config.py    # Redis (cache/Celery), timeouts, feature flags
+    ├── jupyterhub/
+    │   └── jupyterhub_config.py  # DockerSpawner + OIDC (GenericOAuthenticator via Keycloak)
+    ├── traefik/                  # traefik.yml + dynamic/ (routers) + tls/ (cert self-signed)
+    └── keycloak/
+        └── realm-datastack.json  # Realm "datastack": clients (trino, oauth2-proxy...), usuarios
 ```
+
+## Pipeline de dados (medallion) - `jobs/`
+
+Jobs PySpark que levam o dado de bruto a analitico, todos gravando Delta Lake em `s3a://` (SeaweedFS):
+`landing` (raw, staged do site de origem) → `bronze` (tipado) → `prata`/silver (limpo/enriquecido) →
+`ouro`/gold (tabelas fato + KPIs). Rodar com o wrapper (resolve o container Swarm do spark-master, copia o
+job e submete como uid 0):
+
+```bash
+scripts/run-spark-job.sh jobs/landing-beneficios-v3.py
+scripts/run-spark-job.sh jobs/bronze-beneficios-v2.py io.delta:delta-spark_2.12:3.2.0
+scripts/run-spark-job.sh jobs/silver-beneficios-v2.py io.delta:delta-spark_2.12:3.2.0
+scripts/run-spark-job.sh jobs/gold-beneficios-v2.py io.delta:delta-spark_2.12:3.2.0
+```
+
+As tabelas gold só aparecem como SQL depois de registradas no catálogo `delta` do Trino (não são
+`saveAsTable`, então não entram no Hive Metastore sozinhas) — ver "Consultando via Trino" abaixo. Detalhes,
+armadilhas e o histórico de cada fix estão no CLAUDE.md.
+
+## Consultando via Trino (DBeaver ou outro client JDBC)
+
+O Trino tem **3 catálogos**: `postgresql` (bancos operacionais), `hive` e `delta` (Delta Lake — é onde estão
+landing/bronze/prata/ouro). Autenticação é **OAuth2 obrigatório via Keycloak** (sem usuário/senha direto).
+
+- **Endpoint**: `jdbc:trino://trino.<eip>.sslip.io:443/delta` (não use o IP interno nem o nome de
+  serviço — o client roda fora do cluster).
+- **Driver properties**: `SSL=true`, `externalAuthentication=true` (abre o navegador pro login Keycloak).
+- **Certificado self-signed**: importe `config/traefik/tls/ingress.crt` num truststore (não precisa ser o
+  truststore global do client) e aponte via `SSLTrustStorePath`/`SSLTrustStorePassword`, com
+  `SSLVerification=FULL`.
+- **Anexar uma tabela Delta já existente** (ex. as do gold) ao catálogo, sem reescrever nada:
+  ```sql
+  CREATE SCHEMA IF NOT EXISTS delta.ouro WITH (location = 's3a://ouro/pda/beneficios-emitidos/');
+  CALL delta.system.register_table(schema_name => 'ouro', table_name => 'fat_uf',
+      table_location => 's3a://ouro/pda/beneficios-emitidos/fat_uf');
+  -- repita por tabela (fat_especie, fat_banco, kpis_nacionais)
+  ```
+
+Esquema tem que ser **`s3a://`** (não `s3://`) — ver CLAUDE.md para o porquê e outras armadilhas de S3/HMS.
 
 O repositório deve ser clonado em **`/opt/datastack`** em node-1 — `09-deploy-all.sh` e `07-sync-config.sh`
 assumem esse caminho.
@@ -199,11 +260,16 @@ deixa um dos dois preso em `Pending` ("insufficient resources"). Ajustado para c
 `PYTHONPATH=/app/pythonpath` mas não montava o arquivo ali — Superset rodava só com config padrão (Celery
 usando SQLite local em vez de Redis). Corrigido com bind mount de
 `config/superset/superset_config.py:/app/pythonpath/superset_config.py:ro` em `superset` e
-`superset-worker`. **Pendência conhecida:** mesmo com o fix, `superset-worker` ainda falha
-(`RestartFreqExceeded`) tentando abrir `sqla+sqlite:///celerydb.sqlite` — parece ser o scheduler do Celery
-beat tentando usar um arquivo local que o container não tem como escrever; não investigado a fundo. Isso
-afeta só relatórios/queries assíncronas agendadas — o Superset principal (`apps_superset`) funciona
-normalmente sem o worker.
+`superset-worker`.
+
+**Superset: 500 em `/superset/welcome/` (`relation "user_attribute" does not exist`).** O schema do banco
+nunca foi migrado — só existiam as 8 tabelas de auth (`ab_*`) do Flask-AppBuilder, sem nenhum usuário
+criado. Causa raiz em `09-deploy-all.sh`: `docker ps -q -f name=apps_superset | head -1` é um filtro por
+substring que também casa com `apps_superset-worker`; com `head -1` a escolha entre os dois containers é
+indeterminada — se pegasse o worker, o `docker exec` falhava e o `set -e` abortava o script antes de rodar
+`db upgrade`/`create-admin`/`init`. Corrigido para o filtro ancorado `-f "name=^apps_superset\."`. Se isso
+acontecer de novo num cluster novo, rode manualmente: `superset db upgrade && superset fab create-admin
+... && superset init` dentro do container `apps_superset` (não o `-worker`).
 
 **SeaweedFS: portas de serviços replicados (master/volume/filer, 3 réplicas cada) em modo `ingress`
 colidem entre si.** Publicar a mesma porta (`"9333:9333"`, etc) em 3 serviços diferentes falha com `port
@@ -275,6 +341,15 @@ Workaround sem HTTPS: túnel SSH `ssh -L 23646:localhost:23646 root@<eip>` e abr
 | SeaweedFS UI (master) | http://<ip-node-1>:9333 |
 | SeaweedFS Admin (dashboard c/ login) | https://<ip-node-1>:23646 |
 | S3 API | http://<ip-node-1>:8333 |
+| Keycloak (SSO / admin master `admin`) | https://keycloak.<eip>.sslip.io |
+| Trino (via Traefik, OAuth2) | https://trino.<eip>.sslip.io |
+| JupyterHub (via Traefik, OIDC) | https://jupyter.<eip>.sslip.io |
+| SeaweedFS Admin (via Traefik, SSO) | https://seaweedfs.<eip>.sslip.io |
+| Traefik Dashboard (read-only) | https://traefik.<eip>.sslip.io/dashboard/ |
+
+TLS nas URLs `sslip.io` é **self-signed** (o navegador avisa; prossiga). `<svc>.<eip>.sslip.io`
+resolve para o EIP sem DNS próprio — ver CLAUDE.md ("SSO / Ingress") para o padrão de hairpin (browser usa a
+URL externa; chamadas internas de um serviço para o Keycloak usam `http://keycloak:8080`).
 
 ## Storage - SeaweedFS
 
