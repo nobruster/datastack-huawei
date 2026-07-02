@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+  core-site.xml do Hive Metastore - da suporte a S3A (SeaweedFS) ao HMS.
+
+  Por que existe: o CREATE SCHEMA ... WITH (location='s3a://...') e o
+  register_table do Trino mandam o HMS criar/validar o diretorio no S3, mas a
+  imagem apache/hive:3.1.3 nao tem o S3AFileSystem no classpath nem config
+  fs.s3a - o HMS falhava com "ClassNotFoundException S3AFileSystem" /
+  "No FileSystem for scheme s3", devolvido ao Trino como HIVE_METASTORE_ERROR.
+  Os jars (hadoop-aws-3.1.0 + aws-java-sdk-bundle) ja vem na imagem em
+  /opt/hadoop/share/hadoop/tools/lib/ - so precisam entrar no classpath via
+  HADOOP_CLASSPATH (ver 06-datastack.yml). HADOOP_CONF_DIR=/opt/hive/conf,
+  entao este arquivo e montado la.
+
+  Mesmas credenciais/endpoint do Spark (spark-defaults.conf) e do Trino
+  (s3.* em delta.properties) - mantenha em sincronia (grep CHANGE_ME).
+-->
+<configuration>
+    <property>
+        <name>fs.s3a.impl</name>
+        <value>org.apache.hadoop.fs.s3a.S3AFileSystem</value>
+    </property>
+    <property>
+        <name>fs.s3a.endpoint</name>
+        <value>http://seaweedfs-filer-1:8333</value>
+    </property>
+    <property>
+        <name>fs.s3a.access.key</name>
+        <value>seaweedfs_access_CHANGE_ME</value>
+    </property>
+    <property>
+        <name>fs.s3a.secret.key</name>
+        <value>seaweedfs_secret_CHANGE_ME</value>
+    </property>
+    <property>
+        <name>fs.s3a.path.style.access</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>fs.s3a.connection.ssl.enabled</name>
+        <value>false</value>
+    </property>
+</configuration>

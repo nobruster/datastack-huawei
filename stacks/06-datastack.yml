@@ -64,13 +64,28 @@ services:
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER: postgres
+      # IS_RESUME=true: pula o schematool -initSchema no boot (entrypoint faz
+      # SKIP_SCHEMA_INIT="${IS_RESUME:-false}"). O schema do metastore ja foi
+      # criado na 1a subida (no Postgres, db hive_metastore). Sem isto, TODO
+      # restart re-roda o initSchema e falha com "relation BUCKETING_COLS
+      # already exists" (exit 1) - o servico so subia da 1a vez, com o banco
+      # vazio, e nao reiniciava mais.
+      IS_RESUME: "true"
       SERVICE_OPTS: >-
         -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
         -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/hive_metastore
         -Djavax.jdo.option.ConnectionUserName=hive
         -Djavax.jdo.option.ConnectionPassword=hive_password_CHANGE_ME
+      # Poe o S3AFileSystem (hadoop-aws) no classpath do HMS: os jars ja vem na
+      # imagem em tools/lib mas fora do classpath. Sem isso o CREATE SCHEMA/
+      # register_table do Trino sobre location s3a:// falha com
+      # ClassNotFoundException S3AFileSystem (HIVE_METASTORE_ERROR). O
+      # entrypoint faz HADOOP_CLASSPATH=...:$HADOOP_CLASSPATH, preservando este.
+      HADOOP_CLASSPATH: /opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.1.0.jar:/opt/hadoop/share/hadoop/tools/lib/aws-java-sdk-bundle-1.11.271.jar
     volumes:
       - hive_warehouse:/opt/hive/data/warehouse
+      # core-site.xml com fs.s3a -> SeaweedFS (HADOOP_CONF_DIR=/opt/hive/conf)
+      - /opt/datastack/config/hive/core-site.xml:/opt/hive/conf/core-site.xml:ro
     ports:
       - "9083:9083"
     networks:

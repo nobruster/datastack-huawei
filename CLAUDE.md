@@ -224,6 +224,27 @@ directory.
    (`s3.region` is required by the native client even against a non-AWS S3-compatible endpoint; any value
    works since SeaweedFS ignores it.)
 
+**The Hive Metastore ALSO needs S3A — the `CREATE SCHEMA WITH location`/`register_table` error was
+`HIVE_METASTORE_ERROR`, i.e. it came from HMS, not Trino's filesystem.** Fixing Trino's S3 config above
+did NOT resolve it: `CREATE SCHEMA delta.ouro WITH (location = 's3a://...')` makes the `apache/hive:3.1.3`
+metastore itself `mkdirs` the schema dir, and HMS had neither `S3AFileSystem` on its classpath nor an
+`fs.s3a.*` config → it bounced back `ClassNotFoundException: S3AFileSystem` (or `No FileSystem for scheme s3`)
+as `HIVE_METASTORE_ERROR` during query *planning* (0ms running — the tell it's the metastore, not the scan).
+Fix (`06-datastack.yml` hive-metastore service + `config/hive/core-site.xml`):
+- The `hadoop-aws-3.1.0.jar` + `aws-java-sdk-bundle-1.11.271.jar` are already in the image at
+  `/opt/hadoop/share/hadoop/tools/lib/` but off-classpath; put them on via
+  `HADOOP_CLASSPATH` env (the entrypoint does `HADOOP_CLASSPATH=...:$HADOOP_CLASSPATH`, preserving it).
+- Mount `config/hive/core-site.xml` (same `fs.s3a.endpoint`/keys/`path.style.access`/`connection.ssl.enabled`
+  as Spark) at `/opt/hive/conf/core-site.xml` — HMS's `HADOOP_CONF_DIR` is `/opt/hive/conf` (not
+  `/opt/hadoop/etc/hadoop`; if you `docker exec ... hadoop fs -ls s3a://...` to test, pass
+  `-e HADOOP_CONF_DIR=/opt/hive/conf` or it reads the wrong, empty core-site and fails on credentials).
+- **`IS_RESUME: "true"` is mandatory on the hive-metastore service** (was missing): the image entrypoint does
+  `SKIP_SCHEMA_INIT="${IS_RESUME:-false}"` and otherwise runs `schematool -initSchema` on *every* start. The
+  Postgres `hive_metastore` schema is already initialized, so a restart without `IS_RESUME=true` dies with
+  `relation "BUCKETING_COLS" already exists` (exit 1) — the service only ever came up on the very first boot
+  (empty DB) and silently couldn't restart. Redeploying `datastack` to apply the S3A change is what exposed
+  this latent bug; both are fixed together now.
+
 To attach the existing gold tables (or any Delta table under `s3a://<bucket>/...`) into the `delta` catalog,
 run in Trino (e.g. from DBeaver once OAuth2-authenticated — there's no headless/service-account path to
 Trino's HTTP API here since `directAccessGrantsEnabled=false` on the `trino` Keycloak client):
