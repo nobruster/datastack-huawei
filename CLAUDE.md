@@ -293,6 +293,15 @@ fixes — all real, all non-obvious:
    stack or bake a custom image — before enabling the committer in `spark-defaults.conf`.)
 3. **Bulk delete is unsupported** — set `spark.hadoop.fs.s3a.multiobjectdelete.enable=false` (already in
    `spark-defaults.conf`) or cleanup `DeleteObjects` returns `InternalError`.
+3b. **`fs.s3a.directory.marker.retention=keep` is mandatory for any real-volume write** (already in
+   `spark-defaults.conf`). Default S3A deletes "fake directory" markers of parent paths after *every*
+   file write (`deleteUnnecessaryFakeDirectories`); SeaweedFS answers those deletes with `500 InternalError`,
+   so S3A enters exponential retry-backoff and the write **hangs for minutes with no error** (thread dump:
+   `finishedWrite -> deleteUnnecessaryFakeDirectories -> deleteObject -> pauseBeforeRetry`). A small write
+   (the 2000-row smoke) hides it; it only bites at volume. `keep` stops S3A from ever deleting markers —
+   the 41M-row / 88-file landing job dropped from 12+ min (hung) to **13.5s**. Diagnose S3A "silent hangs"
+   with a thread dump (`kill -3 <driver-pid>`; JRE has no `jstack`), not by staring at logs — the driver is
+   busy in a retry loop, so nothing new gets logged.
 4. **Diagnosing S3A hangs**: add `spark.hadoop.fs.s3a.attempts.maximum=1` + `...retry.limit=1` +
    `...connection.timeout=8000` to make the real S3 error surface immediately instead of backing off for
    minutes.
@@ -322,10 +331,18 @@ write via defaults in ~11s, read-back OK, event log landed in `s3a://spark-logs/
   after editing `spark-defaults.conf`, `docker service update --force datastack_spark-history` (and any
   other service that must re-read it).
 
-Remaining from the old plan (not blocking): rebuild `jobs/landing-beneficios-v3.py` from the v2 + staging
-pattern (download ZIP on driver → `fs.copyFromLocalFile` to `s3a://landing/pda/_staging/` → read from
-`s3a://` → write Parquet to `s3a://landing/pda/beneficios-emitidos/202601/`), submit with
-`docker exec -u 0` (UGI passwd trap), validate, then replace v2 with v3 in git.
+`jobs/landing-beneficios-v3.py` is done and validated (2026-07-02): staging pattern (download ZIP on driver
+→ `fs.copyFromLocalFile` to `s3a://landing/pda/_staging/` → read from `s3a://` → write Parquet), **41.5M
+rows / 88 files written in ~13.5s**, submitted with `docker exec -u 0` (UGI passwd trap). Two lessons from
+running it at volume:
+- **No `coalesce(N)` before a large write.** v3's first cut had `coalesce(defaultParallelism)`, and
+  `defaultParallelism` read *before executors register* returns 2 → the whole 11.6 GB funneled through 2
+  tasks on one executor, 6 of 8 cores idle, and dynamic allocation never scaled up (only 2 pending tasks).
+  Removed → the CSV's natural ~88 read partitions (128 MB each) all write in parallel.
+- **Killing a magic-committer job mid-write leaves `__magic`/`__magic.versions` dirs + orphaned multipart
+  uploads** under the destination. The next run's `mode("overwrite")` then hangs/500s trying to delete them.
+  Clean up before re-running: `weed shell` → `fs.rm -r /buckets/<bucket>/<path>` and `s3.clean.uploads
+  -timeAgo 1m`.
 
 ### node-2/node-3 have no egress: ship images with `docker save | ssh docker load`
 
