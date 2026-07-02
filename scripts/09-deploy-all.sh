@@ -33,8 +33,14 @@ echo "Aguardando Swarmpit iniciar (30s)..."
 sleep 30
 
 # 5. Inicializa o Superset
+# Filtro ANCORADO (^apps_superset\.): "name=apps_superset" sem ancora e um
+# substring match que tambem bate em "apps_superset-worker" - com head -1 a
+# escolha entre os dois containers e indeterminada. Se pegar o worker (que
+# pode estar crash-looping, ver CLAUDE.md) o docker exec falha e o `set -e`
+# aborta o script antes de completar db upgrade/create-admin/init, deixando
+# o Superset com schema vazio e zero usuarios (500 em /superset/welcome/).
 echo "--- Inicializando Superset ---"
-SUPERSET_CONTAINER=$(docker ps -q -f name=apps_superset | head -1)
+SUPERSET_CONTAINER=$(docker ps -q -f "name=^apps_superset\." | head -1)
 if [ -n "$SUPERSET_CONTAINER" ]; then
     docker exec $SUPERSET_CONTAINER superset db upgrade
     docker exec $SUPERSET_CONTAINER superset fab create-admin         --username admin         --firstname Admin         --lastname User         --email admin@datastack.local         --password admin123

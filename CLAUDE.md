@@ -194,6 +194,25 @@ current architecture, not a bug to silently "fix" by removing constraints (remov
 bind-mount assumption above). A full Postgres cluster (streaming replication + failover) was evaluated and
 explicitly deferred as a separate, larger project — don't add it unprompted.
 
+## Superset: DB schema must be migrated, and the init container filter was ambiguous
+
+If `/superset/welcome/` (or any page) 500s with `psycopg2.errors.UndefinedTable: relation "user_attribute"
+does not exist` (or similar), the Superset **app schema was never created** — only the 8 Flask-AppBuilder
+auth tables (`ab_*`) exist, meaning `superset db upgrade` never ran. `superset fab list-users` returning
+empty is the same symptom (no `create-admin` either). Fix (idempotent, safe to re-run):
+```
+docker exec <superset-web-container> superset db upgrade
+docker exec <superset-web-container> superset fab create-admin --username admin --firstname Admin \
+  --lastname User --email admin@datastack.local --password admin_password_CHANGE_ME
+docker exec <superset-web-container> superset init
+```
+**Root cause**: `scripts/09-deploy-all.sh`'s `docker ps -q -f name=apps_superset | head -1` used an
+unanchored substring filter that also matches `apps_superset-worker` — with `head -1`, which of the two
+containers gets picked is non-deterministic. If it grabbed the worker (which can be crash-looping, see
+Known Gotchas below) the `docker exec` fails and `set -e` aborts the script before `db upgrade`/`create-admin`/
+`init` ever ran, leaving the DB schema empty with no error surfaced beyond the aborted deploy log. Fixed to
+`-f "name=^apps_superset\."` (anchored, matches only `apps_superset.<replica>.<hash>`).
+
 ## Known gotchas
 
 - **`restart_policy.condition` must be `any` for every long-running service.** With `on-failure`, a clean
