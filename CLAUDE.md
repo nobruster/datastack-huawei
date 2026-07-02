@@ -297,3 +297,43 @@ Two more traps hit while running jobs:
 - **A local input path is not visible to executors on other nodes** (`spark_worker_data` is a per-node
   volume). Download on the driver, then **stage the file into SeaweedFS** (`fs.copyFromLocalFile` to
   `s3a://...`) and have Spark read from `s3a://` so every executor sees it. (See the v3 landing script.)
+
+### NEXT SESSION — finish "Option A: SeaweedFS + magic committer" (resume here)
+
+Decided approach: keep SeaweedFS as the object store and use the S3A **magic committer** (validated: a
+2000-row write landed in ~8s). Remaining, in order:
+
+1. **Make `spark-hadoop-cloud_2.12-3.5.6.jar` persistent on all Spark nodes.** The jar is already committed
+   at `config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar`. Bind-mount it into **spark-master,
+   spark-worker-node2, spark-worker-node3** in `stacks/06-datastack.yml` (add to each service's `volumes:`):
+   ```yaml
+   - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
+   ```
+2. **Enable the magic committer in `config/spark/spark-defaults.conf`** (append):
+   ```
+   spark.hadoop.fs.s3a.committer.name magic
+   spark.hadoop.fs.s3a.committer.magic.enabled true
+   spark.sql.sources.commitProtocolClass org.apache.spark.internal.io.cloud.PathOutputCommitProtocol
+   spark.sql.parquet.output.committer.class org.apache.spark.internal.io.cloud.BindingParquetOutputCommitter
+   ```
+   Do **not** enable this before step 1 — without the jar on every node the executors fail `ClassNotFound`.
+3. **Propagate + redeploy**: `cp` the changed `config/spark/*` and `stacks/06-datastack.yml` to
+   `/opt/datastack` (and `/opt/stacks`), `rsync /opt/datastack/config/ root@node-2:` and `node-3:`, then
+   `docker stack deploy -c /opt/stacks/06-datastack.yml datastack`. Wait for spark-master + worker-node2 to
+   come back `1/1` (node-3 is still 0/1 — no egress, pre-existing).
+4. **Run the v3 landing job** (rebuild `jobs/landing-beneficios-v3.py` from the v2 + the staging pattern:
+   download ~549MB ZIP on the driver → `fs.copyFromLocalFile` the CSV to `s3a://landing/pda/_staging/` →
+   `spark.read.csv("s3a://.../_staging/...")` → write Parquet to
+   `s3a://landing/pda/beneficios-emitidos/202601/`). Submit from the spark-master container:
+   ```
+   docker exec -u 0 <spark-master> sh -c 'export HOME=/root && cd /opt/bitnami/spark && \
+     bin/spark-submit --conf spark.jars.ivy=/root/.ivy2 --conf spark.eventLog.enabled=false \
+     --master spark://spark-master:7077 /path/landing-beneficios-v3.py'
+   ```
+   (`eventLog` stays off until `spark.eventLog.dir` is moved off the bucket **root** `s3a://spark-logs/` — it
+   throws "path must be absolute"; give it a subpath like `s3a://spark-logs/events/` and create the bucket.)
+5. **Validate** the Parquet landed (read back / groupBy UF) and **commit only the new version** of the job
+   (`jobs/landing-beneficios-v3.py`, removing the v2), plus the stack/spark-defaults changes. Push.
+
+Recall for the run: driver needs `docker exec -u 0` (UGI passwd), and the notebook path uses the same magic
+committer confs (see the JupyterHub SparkSession snippet). Repo is **public** — placeholders only in git.
