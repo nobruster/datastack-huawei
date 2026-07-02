@@ -35,7 +35,7 @@ services:
         constraints:
           - node.labels.name == node-1
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
       resources:
         limits:
@@ -58,7 +58,7 @@ services:
         constraints:
           - node.labels.name == node-1
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
 
   # =============================================
@@ -76,7 +76,7 @@ services:
         constraints:
           - node.labels.name == node-1
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
 
   # =============================================
@@ -95,7 +95,7 @@ services:
       labels:
         swarmpit.agent: 'true'
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
 
 volumes:

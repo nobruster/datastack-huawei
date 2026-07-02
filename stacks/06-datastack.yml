@@ -116,6 +116,10 @@ services:
       SPARK_MASTER_WEBUI_PORT: "8090"
     volumes:
       - /opt/datastack/config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+      # spark-hadoop-cloud: PathOutputCommitProtocol/BindingParquetOutputCommitter
+      # (magic committer) - nao vem na imagem bitnami; precisa estar em TODOS os
+      # nos Spark ou executor falha com ClassNotFound.
+      - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
       - spark_logs:/opt/bitnami/spark/logs
     ports:
       - "7077:7077"
@@ -159,6 +163,7 @@ services:
       SPARK_WORKER_WEBUI_PORT: "8091"
     volumes:
       - /opt/datastack/config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+      - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
       - spark_worker_data:/opt/bitnami/spark/work
     ports:
       - "8091:8091"
@@ -196,6 +201,7 @@ services:
       SPARK_WORKER_WEBUI_PORT: "8092"
     volumes:
       - /opt/datastack/config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+      - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
       - spark_worker_data:/opt/bitnami/spark/work
     ports:
       - "8092:8092"

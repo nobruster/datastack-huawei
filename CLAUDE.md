@@ -196,6 +196,14 @@ explicitly deferred as a separate, larger project — don't add it unprompted.
 
 ## Known gotchas
 
+- **`restart_policy.condition` must be `any` for every long-running service.** With `on-failure`, a clean
+  SIGTERM shutdown (exit 0 — e.g. a Celery warm shutdown, a drain, a manual container stop) leaves the
+  service down **forever** with no error anywhere: the task shows `Complete` and Swarm never reschedules it.
+  This is how `apps_superset-worker` sat dead for a day. All stacks now use `any`.
+- **`apache/superset`'s image ships a built-in HEALTHCHECK against the web port (8088).** A Celery worker
+  container from that image serves no HTTP, fails the inherited healthcheck, and gets killed ~90s after
+  becoming ready — in a loop. `superset-worker` sets `healthcheck: disable: true` for this reason; any
+  non-web service reusing a web image needs the same check.
 - **`01-base-setup.sh`'s `apt-get upgrade` can hang forever when run non-interactively.** If a conffile
   (e.g. `/etc/ssh/sshd_config`) was already modified on the image, `dpkg` opens an interactive prompt with
   no TTY to answer it, and the script blocks indefinitely rather than failing. Recovery: `dpkg
@@ -298,42 +306,44 @@ Two more traps hit while running jobs:
   volume). Download on the driver, then **stage the file into SeaweedFS** (`fs.copyFromLocalFile` to
   `s3a://...`) and have Spark read from `s3a://` so every executor sees it. (See the v3 landing script.)
 
-### NEXT SESSION — finish "Option A: SeaweedFS + magic committer" (resume here)
+### Magic committer: DONE (2026-07-02) — how it's wired now
 
-Decided approach: keep SeaweedFS as the object store and use the S3A **magic committer** (validated: a
-2000-row write landed in ~8s). Remaining, in order:
+"Option A: SeaweedFS + magic committer" is finished and validated end-to-end (smoke job: 2000-row Parquet
+write via defaults in ~11s, read-back OK, event log landed in `s3a://spark-logs/events/`):
 
-1. **Make `spark-hadoop-cloud_2.12-3.5.6.jar` persistent on all Spark nodes.** The jar is already committed
-   at `config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar`. Bind-mount it into **spark-master,
-   spark-worker-node2, spark-worker-node3** in `stacks/06-datastack.yml` (add to each service's `volumes:`):
-   ```yaml
-   - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
-   ```
-2. **Enable the magic committer in `config/spark/spark-defaults.conf`** (append):
-   ```
-   spark.hadoop.fs.s3a.committer.name magic
-   spark.hadoop.fs.s3a.committer.magic.enabled true
-   spark.sql.sources.commitProtocolClass org.apache.spark.internal.io.cloud.PathOutputCommitProtocol
-   spark.sql.parquet.output.committer.class org.apache.spark.internal.io.cloud.BindingParquetOutputCommitter
-   ```
-   Do **not** enable this before step 1 — without the jar on every node the executors fail `ClassNotFound`.
-3. **Propagate + redeploy**: `cp` the changed `config/spark/*` and `stacks/06-datastack.yml` to
-   `/opt/datastack` (and `/opt/stacks`), `rsync /opt/datastack/config/ root@node-2:` and `node-3:`, then
-   `docker stack deploy -c /opt/stacks/06-datastack.yml datastack`. Wait for spark-master + worker-node2 to
-   come back `1/1` (node-3 is still 0/1 — no egress, pre-existing).
-4. **Run the v3 landing job** (rebuild `jobs/landing-beneficios-v3.py` from the v2 + the staging pattern:
-   download ~549MB ZIP on the driver → `fs.copyFromLocalFile` the CSV to `s3a://landing/pda/_staging/` →
-   `spark.read.csv("s3a://.../_staging/...")` → write Parquet to
-   `s3a://landing/pda/beneficios-emitidos/202601/`). Submit from the spark-master container:
-   ```
-   docker exec -u 0 <spark-master> sh -c 'export HOME=/root && cd /opt/bitnami/spark && \
-     bin/spark-submit --conf spark.jars.ivy=/root/.ivy2 --conf spark.eventLog.enabled=false \
-     --master spark://spark-master:7077 /path/landing-beneficios-v3.py'
-   ```
-   (`eventLog` stays off until `spark.eventLog.dir` is moved off the bucket **root** `s3a://spark-logs/` — it
-   throws "path must be absolute"; give it a subpath like `s3a://spark-logs/events/` and create the bucket.)
-5. **Validate** the Parquet landed (read back / groupBy UF) and **commit only the new version** of the job
-   (`jobs/landing-beneficios-v3.py`, removing the v2), plus the stack/spark-defaults changes. Push.
+- `config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar` is bind-mounted into spark-master and both workers
+  (`stacks/06-datastack.yml`) — `07-sync-config.sh` now also ships the jar to node-2/node-3.
+- The magic committer + `PathOutputCommitProtocol` confs are enabled in `config/spark/spark-defaults.conf`.
+- `spark.eventLog.dir`/`spark.history.fs.logDirectory` point at `s3a://spark-logs/events/` (a **subpath** —
+  bucket root throws "path must be absolute") and eventLog is **on** by default. The `spark-logs` and
+  `warehouse` buckets exist; `events/` was created with `fs.mkdir` in `weed shell` (Spark errors
+  `FileNotFoundException: s3a://spark-logs/events` at startup if the directory doesn't pre-exist).
+- Changing only a bind-mounted config file does **not** restart a Swarm service (the spec is unchanged) —
+  after editing `spark-defaults.conf`, `docker service update --force datastack_spark-history` (and any
+  other service that must re-read it).
 
-Recall for the run: driver needs `docker exec -u 0` (UGI passwd), and the notebook path uses the same magic
-committer confs (see the JupyterHub SparkSession snippet). Repo is **public** — placeholders only in git.
+Remaining from the old plan (not blocking): rebuild `jobs/landing-beneficios-v3.py` from the v2 + staging
+pattern (download ZIP on driver → `fs.copyFromLocalFile` to `s3a://landing/pda/_staging/` → read from
+`s3a://` → write Parquet to `s3a://landing/pda/beneficios-emitidos/202601/`), submit with
+`docker exec -u 0` (UGI passwd trap), validate, then replace v2 with v3 in git.
+
+### node-2/node-3 have no egress: ship images with `docker save | ssh docker load`
+
+Until the NAT Gateway exists, a new/updated image can't be pulled on node-2/node-3 and their tasks sit in
+`Rejected ("No such image")`. Working fix from node-1: `docker save <image> | ssh root@<node> docker load`.
+Two traps (engine uses the **containerd image store**):
+- If node-1 holds the image as a digest-qualified reference (`docker images` shows `repo:tag@sha256:...`),
+  `docker save repo:tag` fails with "No such image" — save `repo:tag@sha256:<digest>` instead, then
+  `docker tag <id> repo:tag` on the target node.
+- With the containerd store the loaded image's ID **is** the manifest digest, so digest-pinned Swarm specs
+  match without `--resolve-image never`; tasks recover on the next restart attempt.
+
+### Placeholder secrets are LIVE in the SSO path (known issue, deliberate until rotated)
+
+`ingress_sso-seaweedfs` (oauth2-proxy) runs with the literal `--client-secret=oauth2-proxy-secret-CHANGE-ME`
+and `--cookie-secret=datastack_sso_cookie_secret_32by`, and Keycloak runs with the placeholder DB/admin
+passwords from `stacks/11-ingress.yml` — all of which are public in this repo. Only the Trino
+`config.properties` in `/opt/datastack` (client-secret + internal shared-secret) got real values; those live
+**only** on the nodes, never in git. Rotating the SSO secrets means: new secret on the Keycloak client +
+matching `--client-secret` (service update or a real secrets mechanism), new random 32-byte cookie secret.
+The Security Group (single allowed source IP) is currently the only thing making this tolerable.

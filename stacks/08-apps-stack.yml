@@ -19,7 +19,7 @@ services:
         constraints:
           - node.labels.name == node-1
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -51,7 +51,7 @@ services:
         constraints:
           - node.labels.name == node-1
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 10s
 
   # =============================================
@@ -78,7 +78,7 @@ services:
         constraints:
           - node.labels.name == node-1
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 15s
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
@@ -103,13 +103,20 @@ services:
       - /opt/datastack/config/superset/superset_config.py:/app/pythonpath/superset_config.py:ro
     networks:
       - datastack-net
+    # A imagem apache/superset traz um HEALTHCHECK embutido que testa a porta
+    # web (8088). O worker Celery nao serve HTTP, entao sem desabilitar o
+    # healthcheck o Swarm mata o container ~90s depois do "ready" - o worker
+    # sobe, fica pronto e morre em loop (ou fica morto de vez com on-failure,
+    # ja que o warm shutdown sai com exit 0).
+    healthcheck:
+      disable: true
     deploy:
       replicas: 1
       placement:
         constraints:
           - node.labels.name == node-1
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 15s
 
   # =============================================
@@ -132,7 +139,7 @@ services:
         constraints:
           - node.labels.name == node-1
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
 
   # =============================================
@@ -154,7 +161,7 @@ services:
     deploy:
       mode: global
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
 
 volumes:
