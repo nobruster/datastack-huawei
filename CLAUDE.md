@@ -194,6 +194,34 @@ current architecture, not a bug to silently "fix" by removing constraints (remov
 bind-mount assumption above). A full Postgres cluster (streaming replication + failover) was evaluated and
 explicitly deferred as a separate, larger project — don't add it unprompted.
 
+## Trino: new `delta` catalog to query the medallion Delta tables; `hive` catalog had blank S3 creds
+
+Spark writes the landing/bronze/prata/ouro Delta tables straight to `s3a://...` paths (`.write.save(path)`,
+no `saveAsTable`), so they were never registered in the Hive Metastore and didn't show up as SQL tables
+anywhere. Added `config/trino/{coordinator,worker}/catalog/delta.properties` (`connector.name=delta_lake`,
+same `hive.metastore.uri` + `hive.s3.*` as the `hive` catalog, plus
+`delta.register-table-procedure.enabled=true` — the `register_table` procedure that attaches an
+already-existing Delta table by path is off by default). Also found and fixed: `hive.properties` on both
+coordinator and worker had **blank** `hive.s3.aws-access-key`/`aws-secret-key` — it could never have
+authenticated against SeaweedFS S3 (which requires signed requests). Filled with the same
+`seaweedfs_access_CHANGE_ME`/`seaweedfs_secret_CHANGE_ME` Spark uses. A new/changed catalog `.properties`
+file needs `docker service update --force datastack_trino-coordinator` (and workers) to be picked up — Trino
+here runs static catalog management, it doesn't hot-reload the catalog directory.
+
+To attach the existing gold tables (or any Delta table under `s3a://<bucket>/...`) into the `delta` catalog,
+run in Trino (e.g. from DBeaver once OAuth2-authenticated — there's no headless/service-account path to
+Trino's HTTP API here since `directAccessGrantsEnabled=false` on the `trino` Keycloak client):
+```sql
+CREATE SCHEMA IF NOT EXISTS delta.ouro WITH (location = 's3://ouro/pda/beneficios-emitidos/');
+CALL delta.system.register_table(schema_name => 'ouro', table_name => 'fat_uf',
+    table_location => 's3://ouro/pda/beneficios-emitidos/fat_uf');
+-- repeat per table (fat_especie, fat_banco, kpis_nacionais); same pattern works for
+-- delta.landing / delta.bronze / delta.prata against their respective buckets.
+```
+`s3://` and `s3a://` are interchangeable here — Trino's Hive/Delta filesystem module registers one
+implementation for both schemes once `hive.s3.*` is configured, regardless of which scheme Spark used to
+write.
+
 ## Superset: DB schema must be migrated, and the init container filter was ambiguous
 
 If `/superset/welcome/` (or any page) 500s with `psycopg2.errors.UndefinedTable: relation "user_attribute"
