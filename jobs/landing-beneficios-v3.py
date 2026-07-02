@@ -26,6 +26,19 @@ Requisitos de ambiente (ver CLAUDE.md), todos ja em config/spark/spark-defaults.
     gravacao de 41M linhas / 88 arquivos leva ~13s.
   - Submeter como uid com entrada em /etc/passwd: `docker exec -u 0 <spark-master>`
     (o exec fora do entrypoint bitnami quebra o login UGI do Hadoop com uid 1001).
+
+Como executar (no node-1):
+  # Opcao A (recomendada) - o wrapper resolve o container Swarm, copia o .py e
+  # submete como uid 0. Sem --packages (este job nao usa Delta):
+  scripts/run-spark-job.sh jobs/landing-beneficios-v3.py
+
+  # Opcao B (manual) - NAO use `docker exec spark-master`: e servico Swarm, o
+  # container tem sufixo aleatorio. Resolva o ID e copie o job pra dentro:
+  CID=$(docker ps --filter name=datastack_spark-master -q | head -1)
+  docker cp jobs/landing-beneficios-v3.py "$CID:/tmp/landing-v3.py"
+  docker exec -u 0 "$CID" sh -c 'export HOME=/root && cd /opt/bitnami/spark && \
+    bin/spark-submit --conf spark.jars.ivy=/root/.ivy2 \
+    --master spark://spark-master:7077 /tmp/landing-v3.py'
 """
 import io
 import os

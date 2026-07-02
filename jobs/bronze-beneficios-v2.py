@@ -22,12 +22,19 @@ Ambiente (ver CLAUDE.md):
   - fs.s3a.directory.marker.retention=keep (spark-defaults.conf) evita o hang
     de escrita no SeaweedFS.
 
-Como executar:
-  docker exec -u 0 spark-master \\
-    /opt/bitnami/spark/bin/spark-submit \\
-    --master spark://spark-master:7077 \\
-    --packages io.delta:delta-spark_2.12:3.2.0 \\
-    /opt/bitnami/spark/work/bronze-beneficios-v2.py
+Como executar (no node-1):
+  # Opcao A (recomendada) - o wrapper resolve o container Swarm, copia o .py e
+  # submete como uid 0 com o --packages do Delta:
+  scripts/run-spark-job.sh jobs/bronze-beneficios-v2.py io.delta:delta-spark_2.12:3.2.0
+
+  # Opcao B (manual) - NAO use `docker exec spark-master`: e servico Swarm, o
+  # container tem sufixo aleatorio. Resolva o ID e copie o job pra dentro:
+  CID=$(docker ps --filter name=datastack_spark-master -q | head -1)
+  docker cp jobs/bronze-beneficios-v2.py "$CID:/tmp/bronze-v2.py"
+  docker exec -u 0 "$CID" sh -c 'export HOME=/root && cd /opt/bitnami/spark && \
+    bin/spark-submit --conf spark.jars.ivy=/root/.ivy2 \
+    --packages io.delta:delta-spark_2.12:3.2.0 \
+    --master spark://spark-master:7077 /tmp/bronze-v2.py'
 """
 
 import time
