@@ -2,3 +2,4 @@
 # Gere com os comandos documentados no README.
 config/seaweedfs/tls/
 config/traefik/tls/
+__pycache__/
