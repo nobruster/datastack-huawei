@@ -57,6 +57,9 @@ c.GenericOAuthenticator.admin_users = {"admin", "superadmin"}
 # ---------------------------------------------------------------------------
 c.JupyterHub.spawner_class = "dockerspawner.DockerSpawner"
 c.DockerSpawner.image = "jupyter/pyspark-notebook:spark-3.5.0"
+# Baixa a imagem UMA vez (se nao existir localmente) e reusa nos proximos
+# logins; nunca rebaixa uma imagem ja presente no node-1.
+c.DockerSpawner.pull_policy = "ifnotpresent"
 c.DockerSpawner.remove = True
 c.DockerSpawner.debug = True
 
