@@ -369,6 +369,18 @@ clean with 0 nulls, ACID history with 2 versions, Time Travel working).
 - **Delta overwrite is safe to re-run** unlike the raw-S3A overwrite: `replaceWhere` marks old files removed
   in the transaction log (physical delete deferred to `VACUUM`), so no immediate delete → no SeaweedFS
   delete-storm, and no `__magic` orphans to clean.
+- **If a job needs `spark.sql()` (temp views/CTEs), set `spark.sql.catalogImplementation=in-memory` in its
+  SparkSession builder** — done in `jobs/gold-beneficios-v2.py`. Temp views don't need the metastore, and
+  the in-memory catalog never initializes the broken Hive client. `VACUUM` also has an API form:
+  `DeltaTable.forPath(spark, path).vacuum(hours)` (used in `jobs/silver-beneficios-v2.py`).
+
+The full medallion chain is validated end-to-end (2026-07-02), all reading/writing Delta on SeaweedFS:
+`landing` (Parquet, 41.5M rows) → `bronze` (typed, 17 cols) → `prata` (silver: cleaned/parsed, 29 cols —
+sg_uf map, banco/município/meio-pagamento decomposed, flags) → `ouro` (gold: fat_uf 135, fat_especie 65,
+fat_banco 21, kpis_nacionais 1). Silver/gold jobs: `jobs/silver-beneficios-v2.py`, `jobs/gold-beneficios-v2.py`.
+Recurring traps fixed in all of them: mojibake in pasted sources (accented column names/dict keys must be
+real UTF-8 — a wrong `UF_PARA_SIGLA` key silently NULLs `sg_uf` for every accented state), no
+`coalesce(defaultParallelism)` before writes, no `spark.sql()` against the Hive catalog.
 
 ### node-2/node-3 have no egress: ship images with `docker save | ssh docker load`
 
