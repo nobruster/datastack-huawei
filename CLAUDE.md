@@ -212,15 +212,17 @@ To attach the existing gold tables (or any Delta table under `s3a://<bucket>/...
 run in Trino (e.g. from DBeaver once OAuth2-authenticated — there's no headless/service-account path to
 Trino's HTTP API here since `directAccessGrantsEnabled=false` on the `trino` Keycloak client):
 ```sql
-CREATE SCHEMA IF NOT EXISTS delta.ouro WITH (location = 's3://ouro/pda/beneficios-emitidos/');
+CREATE SCHEMA IF NOT EXISTS delta.ouro WITH (location = 's3a://ouro/pda/beneficios-emitidos/');
 CALL delta.system.register_table(schema_name => 'ouro', table_name => 'fat_uf',
-    table_location => 's3://ouro/pda/beneficios-emitidos/fat_uf');
+    table_location => 's3a://ouro/pda/beneficios-emitidos/fat_uf');
 -- repeat per table (fat_especie, fat_banco, kpis_nacionais); same pattern works for
 -- delta.landing / delta.bronze / delta.prata against their respective buckets.
 ```
-`s3://` and `s3a://` are interchangeable here — Trino's Hive/Delta filesystem module registers one
-implementation for both schemes once `hive.s3.*` is configured, regardless of which scheme Spark used to
-write.
+**Must be `s3a://`, not `s3://`** — confirmed by testing (`No FileSystem for scheme "s3"`). With
+`hive.s3.*` config, this connector's filesystem layer is a thin wrapper over Hadoop's own
+`org.apache.hadoop.fs.s3a.S3AFileSystem`, which only registers the `s3a` scheme — unlike old
+Presto/PrestoS3FileSystem, which used to accept `s3`/`s3n`/`s3a` interchangeably. Always match the scheme
+Spark used to write (`s3a://`).
 
 ## Superset: DB schema must be migrated, and the init container filter was ambiguous
 
