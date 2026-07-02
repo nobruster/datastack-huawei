@@ -344,6 +344,32 @@ running it at volume:
   Clean up before re-running: `weed shell` → `fs.rm -r /buckets/<bucket>/<path>` and `s3.clean.uploads
   -timeAgo 1m`.
 
+### Delta Lake jobs (bronze+): `--packages` + Hive-metastore gotcha
+
+`jobs/bronze-beneficios-v2.py` reads the landing Parquet and writes a **Delta Lake** table at
+`s3a://bronze/pda/beneficios-emitidos/` (validated 2026-07-02: 41.5M rows, casts `Decimal(12,2)`/`Date`
+clean with 0 nulls, ACID history with 2 versions, Time Travel working).
+
+- **Delta is NOT in the `bitnami/spark:3.5` image.** Submit with `--packages io.delta:delta-spark_2.12:3.2.0`
+  (compatible with Spark 3.5.6). It resolves on node-1 (has egress) and the driver ships the jars to
+  executors, so node-2/node-3 don't need internet. Durable alternative (like `spark-hadoop-cloud`): download
+  the 3 jars (`delta-spark_2.12`, `delta-storage`, `antlr4-runtime`) and bind-mount them.
+- **Don't use `spark.sql("DESCRIBE HISTORY ...")` (or any `spark.sql` touching the catalog) in a Spark job
+  here.** `spark-defaults.conf` sets `spark.sql.catalogImplementation=hive` +
+  `spark.sql.hive.metastore.version=3.1.3` but **no** `spark.sql.hive.metastore.jars`, so the first SQL that
+  initializes the Hive client dies with *"Builtin jars can only be used when hive execution version == hive
+  metastore version. Execution: 2.3.9 != Metastore: 3.1.3"*. DataFrame-API writes (`.save()`, Delta writes)
+  never touch Hive, which is why landing/bronze writes work. For Delta history use the API:
+  `DeltaTable.forPath(spark, path).history()`. **Latent cluster bug**: to actually use Spark SQL against the
+  external HMS 3.1.3, add `spark.sql.hive.metastore.jars=maven` (or a jars path) — deferred, since nothing
+  needs the Hive catalog from Spark yet (Trino is the SQL engine over the metastore).
+- **No `coalesce(defaultParallelism)` before the write** — same trap as the landing job (reads 2 before
+  executors register). Bronze write dropped from 108s (coalesce 2) to 42s without it; Spark's Parquet read
+  repacks the 88 landing files into ~11 partitions of 128 MB, so the output is 11 healthy Delta files.
+- **Delta overwrite is safe to re-run** unlike the raw-S3A overwrite: `replaceWhere` marks old files removed
+  in the transaction log (physical delete deferred to `VACUUM`), so no immediate delete → no SeaweedFS
+  delete-storm, and no `__magic` orphans to clean.
+
 ### node-2/node-3 have no egress: ship images with `docker save | ssh docker load`
 
 Until the NAT Gateway exists, a new/updated image can't be pulled on node-2/node-3 and their tasks sit in
