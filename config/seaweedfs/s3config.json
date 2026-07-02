@@ -1,0 +1,14 @@
+{
+  "identities": [
+    {
+      "name": "datastack",
+      "credentials": [
+        {
+          "accessKey": "seaweedfs_access_CHANGE_ME",
+          "secretKey": "seaweedfs_secret_CHANGE_ME"
+        }
+      ],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

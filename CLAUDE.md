@@ -218,3 +218,82 @@ docker service ls                                 # replica counts (N/M) across 
 docker stack ps <stack-name>                      # per-service task state/errors for a deployed stack
 timeout 15 docker service logs --raw --tail 200 <service-name> > /tmp/x.log 2>&1  # logs, safely
 ```
+
+## SSO / Ingress (Traefik + Keycloak) — `stacks/11-ingress.yml`
+
+Single cluster entrypoint is **Traefik** (publishes 80/443 on node-1), routing by hostname via
+**sslip.io** (`<svc>.<eip>.sslip.io` resolves to the EIP with no DNS of our own). TLS is a
+self-signed cert (browser warns; proceed). Traefik routers live in `config/traefik/dynamic/dynamic.yml`
+(file provider, `watch: true` → edits hot-reload, no restart). Current routers: `keycloak`, `trino`,
+`jupyter`, `seaweedfs` (SSO), `traefik-dashboard` (`api@internal`, read-only, at `/dashboard/`).
+
+**Keycloak** is the IdP (realm `datastack`; master admin `admin`). Login goes through the realm; the
+services authenticate against it. Because the security is only as good as the network, note the Huawei
+**Security Group** currently allows 80/443 (and the service ports) from a **single source IP** — widen it
+there for more users; a timeout (not a cert warning) means the SG is blocking the caller's IP.
+
+**The hairpin pattern (used everywhere OIDC talks to Keycloak).** A container cannot reach the EIP
+(`keycloak.<eip>.sslip.io` hairpins and fails), but *can* reach `http://keycloak:8080` on the overlay. So
+every integration splits URLs: the **browser** leg (authorize/login, and logout) uses the **external
+HTTPS** sslip.io URL; the **back-channel** (token / jwks / userinfo) uses the **internal**
+`http://keycloak:8080/realms/datastack/...`. This avoids needing the self-signed CA in every client's
+truststore. It's applied in: oauth2-proxy (SeaweedFS Admin), Trino (`oidc.discovery=false` + manual
+`auth-url` external / `token-url`+`jwks-url`+`userinfo-url` internal), and JupyterHub GenericOAuthenticator
+(`authorize_url` external / `token_url`+`userdata_url` internal).
+
+- **Trino OAuth2** (`config/trino/coordinator/config.properties`): `http-server.authentication.type=oauth2`
+  + `web-ui.authentication.type=oauth2` + `http-server.process-forwarded=true` (TLS terminates at Traefik;
+  Trino trusts `X-Forwarded-Proto=https`). Enabling auth **requires** `internal-communication.shared-secret`
+  identical on coordinator **and** all workers, or nodes won't start. The `trino` Keycloak client needs an
+  **audience mapper** (adds `trino` to the token `aud`) or token validation fails after login. Trino 435
+  treats any unknown property as **fatal** — verify property names against the jar before adding
+  (`jar xf trino-main-435.jar io/trino/server/security/oauth2`).
+- **JupyterHub** (`config/jupyterhub/jupyterhub_config.py`): the stock `jupyterhub/jupyterhub` image has
+  **no** `oauthenticator`/`dockerspawner` and the repo config was **never mounted** before — it ran fully
+  default. Now it uses a **locally-built image `datastack/jupyterhub:4.1-oidc`** (see `/tmp/jhbuild/Dockerfile`:
+  base + `pip install oauthenticator dockerspawner`), pinned to node-1 (image is local, no registry). Config
+  is now bind-mounted. DockerSpawner needs `datastack-net` to be **attachable** (it is) and
+  `c.JupyterHub.hub_connect_ip = "jupyterhub"` so spawned notebook containers can reach the hub. Notebook
+  image `jupyter/pyspark-notebook:spark-3.5.0` is pre-pulled on node-1; `pull_policy=ifnotpresent` (pull once).
+
+**Keycloak realm is code, but session state drifts.** `config/keycloak/realm-datastack.json` is imported at
+boot (`--import-realm`) and is the source of truth for clients/users. Anything created via the admin **API**
+at runtime (done a lot this session) is **not** in the file until reconciled — reconcile it or a realm
+re-import silently loses it. Keycloak redirect-URI **wildcards don't match a subdomain** (`https://*.<eip>...`
+did not match `seaweedfs.<eip>...`); list the explicit callback URL per service.
+
+## Spark → SeaweedFS (S3A): the working recipe and its traps
+
+The stack ships hadoop-aws-3.3.4 + aws-java-sdk-bundle in the Spark image, and `spark-defaults.conf` points
+S3A at SeaweedFS (`seaweedfs-filer-1:8333`, path-style, ssl off). Getting a write to actually land took four
+fixes — all real, all non-obvious:
+
+1. **SeaweedFS S3 needs identities configured or it rejects signed requests.** The filers ran `-s3` with no
+   `-s3.config`; a signed PUT then fails with *"Signed request requires setting up SeaweedFS S3
+   authentication"*. Fix: `config/seaweedfs/s3config.json` (identity with the same access/secret keys as
+   `spark-defaults.conf`) mounted into all three filers + `-s3.config=...` on their commands
+   (`stacks/05-seaweedfs-stack.yml`).
+2. **The default committer fails on SeaweedFS.** `FileOutputCommitter` (v1 **and** v2) finalizes by
+   **renaming** = S3 server-side **COPY**, which SeaweedFS rejects: *"Copy Source must mention the source
+   bucket and key"*. Symptom without fail-fast is a **silent multi-minute hang** (S3A retry backoff), not an
+   error. Fix: use the **S3A magic committer**, which writes straight to the destination via multipart (no
+   rename): drop `spark-hadoop-cloud_2.12-3.5.6.jar` on the classpath (not in the base image) and set
+   `spark.hadoop.fs.s3a.committer.name=magic`, `...committer.magic.enabled=true`,
+   `spark.sql.sources.commitProtocolClass=org.apache.spark.internal.io.cloud.PathOutputCommitProtocol`,
+   `spark.sql.parquet.output.committer.class=org.apache.spark.internal.io.cloud.BindingParquetOutputCommitter`.
+   Validated: 2000-row write landed in ~8s. (TODO: make the jar persistent on all Spark nodes — mount via the
+   stack or bake a custom image — before enabling the committer in `spark-defaults.conf`.)
+3. **Bulk delete is unsupported** — set `spark.hadoop.fs.s3a.multiobjectdelete.enable=false` (already in
+   `spark-defaults.conf`) or cleanup `DeleteObjects` returns `InternalError`.
+4. **Diagnosing S3A hangs**: add `spark.hadoop.fs.s3a.attempts.maximum=1` + `...retry.limit=1` +
+   `...connection.timeout=8000` to make the real S3 error surface immediately instead of backing off for
+   minutes.
+
+Two more traps hit while running jobs:
+- **`docker exec ... spark-submit` fails Hadoop UGI login** (`invalid null input: name`) because the exec
+  bypasses the bitnami entrypoint and uid 1001 has no `/etc/passwd` entry. Run the driver as a user that
+  *does* (`docker exec -u 0`) — a JupyterHub `jovyan` (uid 1000) notebook is unaffected. Also set
+  `HOME`/`spark.jars.ivy` to a writable dir.
+- **A local input path is not visible to executors on other nodes** (`spark_worker_data` is a per-node
+  volume). Download on the driver, then **stage the file into SeaweedFS** (`fs.copyFromLocalFile` to
+  `s3a://...`) and have Spark read from `s3a://` so every executor sees it. (See the v3 landing script.)

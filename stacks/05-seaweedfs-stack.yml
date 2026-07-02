@@ -151,9 +151,10 @@ services:
   # SeaweedFS Filer node-1 (S3 API porta 8333)
   seaweedfs-filer-1:
     image: chrislusf/seaweedfs:4.37
-    command: filer -ip.bind=0.0.0.0 -master=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8888 -s3 -s3.port=8333
+    command: filer -ip.bind=0.0.0.0 -master=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8888 -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3config.json
     volumes:
       - seaweedfs-filer-1:/data
+      - /opt/datastack/config/seaweedfs/s3config.json:/etc/seaweedfs/s3config.json:ro
     ports:
       - target: 8888
         published: 8888
@@ -175,9 +176,10 @@ services:
   # SeaweedFS Filer node-2
   seaweedfs-filer-2:
     image: chrislusf/seaweedfs:4.37
-    command: filer -ip.bind=0.0.0.0 -master=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8888 -s3 -s3.port=8333
+    command: filer -ip.bind=0.0.0.0 -master=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8888 -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3config.json
     volumes:
       - seaweedfs-filer-2:/data
+      - /opt/datastack/config/seaweedfs/s3config.json:/etc/seaweedfs/s3config.json:ro
     ports:
       - target: 8888
         published: 8888
@@ -199,9 +201,10 @@ services:
   # SeaweedFS Filer node-3
   seaweedfs-filer-3:
     image: chrislusf/seaweedfs:4.37
-    command: filer -ip.bind=0.0.0.0 -master=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8888 -s3 -s3.port=8333
+    command: filer -ip.bind=0.0.0.0 -master=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -port=8888 -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3config.json
     volumes:
       - seaweedfs-filer-3:/data
+      - /opt/datastack/config/seaweedfs/s3config.json:/etc/seaweedfs/s3config.json:ro
     ports:
       - target: 8888
         published: 8888
