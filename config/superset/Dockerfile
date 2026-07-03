@@ -13,5 +13,7 @@ FROM apache/superset:3.1.3
 # superset-data:/app/superset_home) - em runtime o volume esconde o que foi
 # instalado na imagem, e o Superset sobe sem authlib (ModuleNotFoundError).
 USER root
-RUN pip install --no-cache-dir "cryptography>=42.0.4,<43.0.0" Authlib
+# trino[sqlalchemy]: driver para conectar o Superset no Trino (dialeto
+# sqlalchemy "trino://") - tambem nao vem na imagem oficial.
+RUN pip install --no-cache-dir "cryptography>=42.0.4,<43.0.0" Authlib "trino[sqlalchemy]"
 USER superset
