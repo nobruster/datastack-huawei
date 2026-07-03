@@ -77,6 +77,14 @@ x-airflow-env: &airflow-common-env
   # URL publica (o apiserver "nao adivinha" o dominio/CNAME - doc 3.0). Usada em
   # links e no fluxo OAuth (redirect). Traefik termina TLS.
   AIRFLOW__API__BASE_URL: "https://airflow.<eip>.sslip.io"
+  # Execution API (Airflow 3): o LocalExecutor lanca um supervisor por task que
+  # fala com a Execution API por HTTP. Se [core] execution_api_server_url nao for
+  # setado, ele DERIVA de API__BASE_URL (a EIP externa acima) -> hairpin: de dentro
+  # de um container a EIP e inalcancavel -> httpx.ConnectTimeout em supervise() e a
+  # task falha ANTES de rodar (logs 0 bytes). Aponta direto para o apiserver na
+  # rede overlay (mesmo padrao hairpin do resto do cluster). Path /execution/ e o
+  # mount da Execution API (validado: GET /execution/health -> 200).
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-apiserver:8080/execution/"
   # Auth manager = FAB (le webserver_config.py, suporta AUTH_OAUTH/SSO).
   AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
   AIRFLOW__CORE__LOAD_EXAMPLES: "False"

@@ -693,6 +693,33 @@ again only on a fresh DB): `airflow db migrate` + `airflow fab-db migrate` via `
   unattended. Validated 2026-07-03 by
   really running bronze → silver → gold via `airflow tasks test` (landing skipped: identical mechanism,
   would just re-download the 11GB ZIP).
+- **`AIRFLOW__CORE__EXECUTION_API_SERVER_URL` must be set explicitly, or every REAL run dies before the task
+  even starts.** In Airflow 3 the LocalExecutor doesn't run tasks in-process — it forks a **task supervisor**
+  that talks to the **Execution API** over HTTP (`local_executor._execute_work → supervise()`). Without
+  `[core] execution_api_server_url` set, that URL is *derived* from `AIRFLOW__API__BASE_URL` — which on this
+  cluster is the external `https://airflow.<eip>.sslip.io` (needed for UI links/OAuth redirects) —
+  and a container can't reach its own EIP (the hairpin pattern, #1 recurring bug class in this cluster; same
+  shape as the Keycloak OIDC split above). Result: `httpx.ConnectTimeout`, the supervisor dies before the
+  task ever runs, and the symptoms look nothing like a timeout — **0-byte task logs, empty `start_date`,
+  same on every retry**, while `airflow tasks test` (see corollary below) works fine, which is what let this
+  ship unnoticed. Fix, in `stacks/12-airflow.yml`'s `x-airflow-common-env` anchor:
+  `AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-apiserver:8080/execution/"` — internal Swarm
+  service name, and `/execution/` is the real mount path of the Execution API on this image (confirmed via
+  `GET /execution/health` → 200). Same split as everywhere else OIDC/API touches Keycloak: external
+  `API__BASE_URL` for the browser, internal `EXECUTION_API_SERVER_URL` for the task supervisor.
+  - **Corollary 1**: `airflow tasks test` does **not** exercise the Execution API at all — it runs the task
+    in-process in the CLI, bypassing the supervisor entirely. It is therefore useless for validating this
+    class of bug; only a real `airflow dags trigger` (or scheduled run) goes through
+    `local_executor`/`supervise()`. This is exactly how the bug passed the 2026-07-03 validation above (that
+    validation used `tasks test`) and only surfaced on the first real trigger.
+  - **Corollary 2 (red herring)**: while the ConnectTimeout was happening, logs also showed `ERROR - DAG
+    '...' not found in serialized_dag table`. That error is a **side effect** of the executor's failure path
+    in 3.0.6 when the supervisor dies mid-startup, not a real DAG-serialization problem — it disappeared
+    entirely after the fix (0 occurrences over a 20-minute run). Don't go chasing serialized-DAG/dag-processor
+    theories if this message shows up alongside a `ConnectTimeout`; fix the Execution API URL first.
+  - Validated 2026-07-04: full real `medallion_beneficios` DagRun, success end to end (landing ~9m55s
+    re-downloading the ~11GB ZIP → bronze 53s → prata 2m04s → ouro 2m07s), 4 completed apps in Spark History,
+    multi-master URL used throughout.
 - **Shared code folder `/data/shared`** (host node-1, sticky `1777` because uids differ): mounted as
   `/opt/shared` in spark-master and airflow-scheduler (rw; ro in dag-processor) and `/home/jovyan/shared`
   in Jupyter notebook containers (DockerSpawner volume). It is for CODE (.py jobs, notebooks), never data

@@ -106,6 +106,10 @@ correspondente de `/opt/datastack/jobs` — **sem `docker cp`**, porque o spark-
 diretório read-only. Está com `schedule=None` (trigger manual); troque por um cron no DAG para rodar
 sozinho. Ver CLAUDE.md ("Airflow 3.0.6 orchestrates the Spark jobs") para os detalhes.
 
+Em toda execução real (não `tasks test`), o supervisor de cada task fala com a Execution API pela URL
+**interna** (`AIRFLOW__CORE__EXECUTION_API_SERVER_URL`) — mesmo padrão hairpin do resto do cluster; detalhes
+e o bug que isso corrigiu estão no CLAUDE.md.
+
 ## Pasta compartilhada de código — `/data/shared`
 
 Para facilitar desenvolvimento e execução de jobs, há uma pasta compartilhada entre as três ferramentas que
