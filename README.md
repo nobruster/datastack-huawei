@@ -14,41 +14,111 @@ Stack de processamento de dados rodando em **Docker Swarm** na **Huawei Cloud HC
 
 | Nó | IP Privado | EIP | Papel |
 |---|---|---|---|
-| node-1 | <ip-node-1> | <eip> | Swarm manager (leader), PostgreSQL, Hive Metastore, Spark Master, Spark History Server, Trino Coordinator, Redis, JupyterHub, Superset, Portainer, Swarmpit |
+| node-1 | <ip-node-1> | <eip> | Swarm manager (leader), PostgreSQL, Hive Metastore, Spark Master, Spark History Server, Trino Coordinator, Redis, JupyterHub, Superset, Portainer, Swarmpit, Airflow, Traefik, Keycloak |
 | node-2 | <ip-node-2> | - | Swarm manager, Spark Worker, Trino Worker, SeaweedFS (master+volume+filer) |
 | node-3 | <ip-node-3> | - | Swarm manager, Spark Worker, Trino Worker, SeaweedFS (master+volume+filer) |
 
 ## Componentes da Stack e Portas
 
-Todos os serviços rodam em container Docker (nenhum roda nativo no host). Portas marcadas com 🌐 são
-acessadas externamente (navegador/cliente fora do cluster); as demais são só para comunicação
-container-a-container via nome de serviço do Swarm.
+Todos os serviços rodam em container Docker (nenhum roda nativo no host). **O único ingresso HTTP externo é
+o 443 do Traefik**, sempre com SSO/OAuth — as portas cruas de UI foram fechadas (ver "Ingress único + SSO"
+abaixo). A coluna "Acesso externo" indica o hostname `sslip.io` (via Traefik). Portas listadas sem hostname
+são só para comunicação container-a-container via nome de serviço do Swarm, ou protocolos de fio ainda
+publicados no host e protegidos pelo Security Group.
 
-| Serviço | Versão | Porta(s) | Nó | Stack |
-|---|---|---|---|---|
-| PostgreSQL | 15 | 5432 | node-1 | datastack |
-| Hive Metastore | 3.1.3 | 9083 | node-1 | datastack |
-| Apache Spark Master | 3.5 | 🌐 8090 (UI), 7077 (RPC) | node-1 | datastack |
-| Apache Spark Worker | 3.5 | 🌐 8091 (node-2), 8092 (node-3) | node-2, node-3 | datastack |
-| Spark History Server | 3.5 | 🌐 18081 | node-1 | datastack |
-| Trino Coordinator | 435 | 🌐 8080 (direto) / 🌐 443 via Traefik+OAuth2 | node-1 | datastack |
-| Trino Worker | 435 | 8080 (interno) | node-2, node-3 | datastack |
-| SeaweedFS Master | 3.65 | 🌐 9333, 19333 | todos | seaweedfs |
-| SeaweedFS Volume | 3.65 | 8081, 18080 | todos | seaweedfs |
-| SeaweedFS Filer (+ S3 API) | 3.65 | 🌐 8888, 🌐 8333 | todos | seaweedfs |
-| SeaweedFS Admin (dashboard) | 3.95 | 🌐 23646, 🌐 443 via Traefik+SSO | node-1 | seaweedfs |
-| Redis | 7 | 6379 | node-1 | apps |
-| JupyterHub | 4.1 | 🌐 8000, 🌐 443 via Traefik | node-1 | apps |
-| Apache Superset | 3.1.3 | 🌐 8088 | node-1 | apps |
-| Portainer | 2.20.3 | 🌐 9000 (HTTP), 🌐 9443 (HTTPS) | node-1 | apps |
-| Portainer Agent | 2.20.3 | 9001 | todos | apps |
-| Swarmpit App | 1.10 | 🌐 888 | node-1 | swarmpit |
-| Swarmpit Agent | latest | - | todos | swarmpit |
-| Swarmpit DB (CouchDB) | 2.3.0 | 5984 (interno) | node-1 | swarmpit |
-| Swarmpit InfluxDB | 1.8 | 8086 (interno) | node-1 | swarmpit |
-| Traefik (ingress) | v3.1 | 🌐 80, 🌐 443 | node-1 | ingress |
-| Keycloak (IdP/SSO) | 25.0 | 8080 (interno, via Traefik) | node-1 | ingress |
-| oauth2-proxy (SSO do SeaweedFS Admin) | v7.6.0 | 4180 (interno, via Traefik) | node-1 | ingress |
+| Serviço | Versão | Porta(s) internas / host | Acesso externo (Traefik+SSO) | Nó | Stack |
+|---|---|---|---|---|---|
+| PostgreSQL | 15 | 5432 (interno) | — | node-1 | datastack |
+| Hive Metastore | 3.1.3 | 9083 (host, SG) | — | node-1 | datastack |
+| Apache Spark Master | 3.5 | 8090 (UI, interno), 7077 (RPC, host) | `spark.<eip>.sslip.io` | node-1 | datastack |
+| Apache Spark Worker | 3.5 | 8091/8092 (interno) | — (fechado, baixo valor) | node-2, node-3 | datastack |
+| Spark History Server | 3.5 | 18081 (interno) | `spark-history.<eip>.sslip.io` | node-1 | datastack |
+| Trino Coordinator | 435 | 8080 (interno) | `trino.<eip>.sslip.io` (OAuth2 nativo) | node-1 | datastack |
+| Trino Worker | 435 | 8080 (interno) | — | node-2, node-3 | datastack |
+| SeaweedFS Master | 3.65 | 9333 (interno), 19333 (host, gRPC) | `seaweedfs-master.<eip>.sslip.io` | todos | seaweedfs |
+| SeaweedFS Volume | 3.65 | 8081, 18080 (host, SG) | — | todos | seaweedfs |
+| SeaweedFS Filer (+ S3 API) | 3.65 | 8888 (interno), 8333 (S3, host) | `seaweedfs-filer.<eip>.sslip.io` | todos | seaweedfs |
+| SeaweedFS Admin (dashboard) | 3.95 | 23646 (interno) | `seaweedfs.<eip>.sslip.io` | node-1 | seaweedfs |
+| Redis | 7 | 6379 (interno) | — | node-1 | apps |
+| JupyterHub | 4.1 | 8000 (interno) | `jupyter.<eip>.sslip.io` (OIDC nativo) | node-1 | apps |
+| Apache Superset | 3.1.3-oidc | 8088 (interno) | `superset.<eip>.sslip.io` (OIDC nativo) | node-1 | apps |
+| Portainer | 2.20.3 | 9000/9443 (host) † | `portainer.<eip>.sslip.io` (OIDC nativo) | node-1 | apps |
+| Portainer Agent | 2.20.3 | 9001 (host) | — | todos | apps |
+| Swarmpit App | 1.10 | 8080 (interno) | `swarmpit.<eip>.sslip.io` ‡ | node-1 | swarmpit |
+| Swarmpit Agent | latest | - | — | todos | swarmpit |
+| Swarmpit DB (CouchDB) | 2.3.0 | 5984 (interno) | — | node-1 | swarmpit |
+| Swarmpit InfluxDB | 1.8 | 8086 (interno) | — | node-1 | swarmpit |
+| Apache Airflow 3.0.6 | 3.0.6-oidc | 8080 (api-server, interno) | `airflow.<eip>.sslip.io` (OIDC nativo) | node-1 | airflow |
+| Traefik (ingress) | v3.1 | 🌐 80, 🌐 443 (host) | `traefik.<eip>.sslip.io/dashboard/` (SSO) | node-1 | ingress |
+| Keycloak (IdP/SSO) | 25.0 | 8080 (interno) | `keycloak.<eip>.sslip.io` | node-1 | ingress |
+| oauth2-proxy (`sso-auth`, forward-auth único) | v7.6.0 | 4180 (interno) | — (middleware do Traefik) | node-1 | ingress |
+
+`<eip>` = `<eip>`. † Portainer ainda publica 9000/9443 no host **até o login OAuth ser confirmado**
+na UI (a config está pronta; ver "Ingress único + SSO"). ‡ Swarmpit tem o gate SSO do Traefik **mais** o
+login interno próprio (login duplo — limitação da ferramenta). Portas ainda publicadas no host (7077 RPC
+Spark, 9083 Hive Thrift, 8081/18080 e 8333/19333 SeaweedFS, 9001 Portainer Agent) são protocolos de fio /
+S3, sem UI de navegador — proteção é rede overlay + Security Group.
+
+## Ingress único + SSO (Traefik + Keycloak)
+
+O cluster tem **um único ponto de entrada HTTP**: o Traefik (443 no node-1), roteando por hostname via
+`sslip.io` (`<svc>.<eip>.sslip.io` resolve para o EIP sem DNS próprio). Todas as UIs de navegador
+ficam atrás dele com SSO; **as portas cruas de UI (8090, 18081, 8080, 8000, 8088, 888, 8888, 9333, 6379...)
+foram removidas da publicação no host** — o acesso é só via 443 autenticado. Três mecanismos de auth
+convivem:
+
+1. **OIDC nativo** (o próprio app fala com o Keycloak): Trino, JupyterHub, Superset, Airflow e Portainer.
+   Cada um faz seu fluxo OAuth2/OIDC; o Traefik só termina TLS e encaminha.
+2. **oauth2-proxy em modo ForwardAuth** (`sso-auth`, **um único** proxy p/ todo o cluster): protege as UIs
+   que não têm OIDC próprio — Spark Master, Spark History, SeaweedFS Filer/Master, SeaweedFS Admin, Swarmpit
+   e o dashboard do Traefik. Um proxy / um client Keycloak / um cookie (`_oauth2_proxy` no domínio
+   `.sslip.io`) ⇒ **SSO real**: loga uma vez, vale para todos esses hosts. Adicionar uma UI nova é um router
+   no `dynamic.yml` + `middlewares: [sso-auth]`.
+3. **Keycloak** é o IdP (realm `datastack`). Padrão **hairpin** obrigatório (um container não alcança o EIP):
+   o browser usa a URL externa `https://keycloak...sslip.io`; o back-channel (token/jwks/userinfo, chamado
+   pelo container) usa `http://keycloak:8080` interno. Ver CLAUDE.md ("SSO / Ingress") para detalhes.
+
+### Identidade única: `superadmin`
+
+O usuário **`superadmin`** (realm `datastack`) é a conta administrativa única para todas as UIs. Ele carrega
+as realm roles `user`, `superset_admin`, `airflow_admin`, que viram `Admin` em cada ferramenta via
+`AUTH_ROLES_MAPPING` (Superset, Airflow) e está em `admin_users` do JupyterHub. A senha do `superadmin`
+**não é versionada** (vive só no Keycloak). Exceções: **Swarmpit** mantém login interno próprio por cima do
+gate SSO (login duplo); o **console admin do Keycloak** (`/admin/master/console`) usa o `admin` do realm
+`master`, não o `superadmin`; **Trino** e as UIs atrás do forward-auth não têm RBAC por usuário — qualquer
+usuário autenticado do realm tem o mesmo acesso.
+
+## Orquestração — Apache Airflow 3.0
+
+O **Airflow 3.0.6** (stack `airflow`, imagem local `datastack/airflow:3.0-oidc`) orquestra os jobs Spark.
+Componentes: `api-server`, `scheduler` (LocalExecutor — os tasks rodam aqui), `dag-processor` e `triggerer`,
+todos pinados no node-1, **sem porta publicada no host** (acesso só via `airflow.<eip>.sslip.io`).
+Metadata DB é o banco `airflow` no Postgres containerizado. Login via Keycloak (role `airflow_admin` → Admin;
+demais usuários entram como Viewer).
+
+O DAG `dags/medallion_beneficios.py` roda a cadeia `landing → bronze → prata → ouro`: cada task faz
+`docker exec` no container do spark-master (via socket do Docker montado no scheduler) e submete o job
+correspondente de `/opt/datastack/jobs` — **sem `docker cp`**, porque o spark-master agora monta esse
+diretório read-only. Está com `schedule=None` (trigger manual); troque por um cron no DAG para rodar
+sozinho. Ver CLAUDE.md ("Airflow 3.0.6 orchestrates the Spark jobs") para os detalhes.
+
+## Pasta compartilhada de código — `/data/shared`
+
+Para facilitar desenvolvimento e execução de jobs, há uma pasta compartilhada entre as três ferramentas que
+manipulam código:
+
+| Ferramenta | Ponto de montagem |
+|---|---|
+| Jupyter (notebooks) | `/home/jovyan/shared` |
+| Spark Master | `/opt/shared` |
+| Airflow (scheduler) | `/opt/shared` |
+
+É o mesmo diretório `/data/shared` no host node-1 (sticky `1777`, porque os UIDs diferem entre as
+ferramentas), no disco de dados de 3TB. **É para CÓDIGO** (`.py`, notebooks), **nunca para dados** — os
+executores em node-2/node-3 não enxergam o disco local do node-1; dados sempre trafegam via `s3a://`
+(SeaweedFS). Sobrevive a restart de container, redeploy de stack, rebuild de imagem e reboot do node-1 (é
+bind mount no disco montado via `/etc/fstab`; o `01-base-setup.sh` recria a pasta num rebuild de VM).
+Ressalva: um **container de notebook já aberto não ganha o mount novo** — vale a partir do próximo spawn.
 
 ## Estrutura do Repositório
 
@@ -69,15 +139,18 @@ datastack-huawei/
 │   ├── 06-datastack.yml          # PostgreSQL + Hive Metastore + Spark (+ History Server) + Trino
 │   ├── 08-apps-stack.yml         # Redis + JupyterHub + Superset + Portainer
 │   ├── 10-swarmpit-stack.yml     # Swarmpit (gerenciamento do Swarm)
-│   └── 11-ingress.yml            # Traefik (ingress/TLS) + Keycloak (SSO) + oauth2-proxy
+│   ├── 11-ingress.yml            # Traefik (ingress/TLS) + Keycloak (SSO) + oauth2-proxy (forward-auth)
+│   └── 12-airflow.yml            # Apache Airflow 3.0 (api-server + scheduler + dag-processor + triggerer)
 ├── jobs/                         # Pipeline medallion (PySpark), landing -> bronze -> silver -> gold
 │   ├── landing-beneficios-v3.py  # Ingestao raw (staging s3a:// + magic committer)
 │   ├── bronze-beneficios-v2.py   # Tipagem/Delta Lake sobre a landing
 │   ├── silver-beneficios-v2.py   # Limpeza, parsing, enriquecimento
 │   └── gold-beneficios-v2.py     # Tabelas fato/KPI prontas para BI (fat_uf, fat_especie, fat_banco, kpis)
+├── dags/                         # DAGs do Airflow (montado em /opt/airflow/dags)
+│   └── medallion_beneficios.py   # Orquestra landing -> bronze -> prata -> ouro via docker exec no spark-master
 └── config/
     ├── postgres/
-    │   └── init.sql              # Cria databases/usuarios hive e superset (1a inicializacao)
+    │   └── init.sql              # Cria databases/usuarios hive, superset, keycloak, airflow (1a inicializacao)
     ├── hive/
     │   └── core-site.xml         # fs.s3a.* do Hive Metastore (suporte a S3A/SeaweedFS)
     ├── trino/
@@ -88,12 +161,17 @@ datastack-huawei/
     │   └── jars/                 # spark-hadoop-cloud (commiter S3A magic, nao vem na imagem bitnami)
     ├── seaweedfs/                # s3config.json (identidades S3), security.toml, tls/ (admin)
     ├── superset/
-    │   └── superset_config.py    # Redis (cache/Celery), timeouts, feature flags
+    │   ├── Dockerfile            # datastack/superset:3.1.3-oidc (Authlib p/ AUTH_OAUTH)
+    │   └── superset_config.py    # Redis (cache/Celery), timeouts, feature flags, SSO Keycloak
     ├── jupyterhub/
-    │   └── jupyterhub_config.py  # DockerSpawner + OIDC (GenericOAuthenticator via Keycloak)
-    ├── traefik/                  # traefik.yml + dynamic/ (routers) + tls/ (cert self-signed)
+    │   ├── Dockerfile            # datastack/jupyterhub:4.1-oidc (oauthenticator + dockerspawner)
+    │   └── jupyterhub_config.py  # DockerSpawner + OIDC (GenericOAuthenticator via Keycloak) + pasta shared
+    ├── airflow/
+    │   ├── Dockerfile            # datastack/airflow:3.0-oidc (authlib + provider FAB + docker CLI)
+    │   └── webserver_config.py   # FAB auth manager + AUTH_OAUTH (SSO Keycloak, role airflow_admin -> Admin)
+    ├── traefik/                  # traefik.yml + dynamic/ (routers + middleware sso-auth) + tls/ (self-signed)
     └── keycloak/
-        └── realm-datastack.json  # Realm "datastack": clients (trino, oauth2-proxy...), usuarios
+        └── realm-datastack.json  # Realm "datastack": clients (trino, oauth2-proxy, superset, airflow, portainer), usuarios
 ```
 
 ## Pipeline de dados (medallion) - `jobs/`
@@ -109,6 +187,10 @@ scripts/run-spark-job.sh jobs/bronze-beneficios-v2.py io.delta:delta-spark_2.12:
 scripts/run-spark-job.sh jobs/silver-beneficios-v2.py io.delta:delta-spark_2.12:3.2.0
 scripts/run-spark-job.sh jobs/gold-beneficios-v2.py io.delta:delta-spark_2.12:3.2.0
 ```
+
+Ou orquestre a cadeia inteira pelo **Airflow** (DAG `medallion_beneficios`, trigger manual na UI
+`airflow.<eip>.sslip.io` ou `airflow dags trigger medallion_beneficios`) — mesmo mecanismo de
+submissão, encadeando as 4 camadas. Ver "Orquestração — Apache Airflow 3.0" acima.
 
 As tabelas gold só aparecem como SQL depois de registradas no catálogo `delta` do Trino (não são
 `saveAsTable`, então não entram no Hive Metastore sozinhas) — ver "Consultando via Trino" abaixo. Detalhes,
@@ -167,6 +249,18 @@ bash scripts/07-sync-config.sh
 bash scripts/09-deploy-all.sh
 ```
 
+O `09-deploy-all.sh` faz deploy das stacks `05/06/08/10`. As stacks `11-ingress` (Traefik+Keycloak+SSO) e
+`12-airflow` (Airflow) são deployadas à parte:
+
+```bash
+docker stack deploy -c /opt/datastack/stacks/11-ingress.yml ingress
+docker stack deploy -c /opt/datastack/stacks/12-airflow.yml airflow
+```
+
+A imagem `datastack/airflow:3.0-oidc` é buildada localmente (`docker build -t datastack/airflow:3.0-oidc
+config/airflow/`, como as imagens `-oidc` de Superset/JupyterHub), e num banco novo o Airflow precisa de
+`airflow db migrate` + `airflow fab-db migrate` uma vez. Ver CLAUDE.md para os detalhes.
+
 ## Swarmpit - detalhes importantes
 
 **Nomes de serviço são obrigatórios: `app`, `db`, `influxdb`, `agent` (sem prefixo).** O `swarmpit/agent`
@@ -198,8 +292,9 @@ etc) deve usar o **nome do serviço no Swarm** (`postgres`, `spark-master`, `hiv
   até a rede overlay e o `docker_gwbridge` do próprio nó (que não atravessa nós). A conexão simplesmente
   nunca chega no destino (timeout/reset).
 
-Única exceção: URLs de UI nos comentários/README (ex: `http://<ip-node-1>:8090`) — essas são abertas de
-um navegador **fora** do cluster, onde o IP real é exatamente o que se quer.
+Única exceção: endpoints acessados de **fora** do cluster por IP/porta ainda publicados no host (ex: a S3
+API em `http://<ip-node-1>:8333`, ou um client S3/JDBC) — aí o IP real é exatamente o que se quer. As UIs
+de navegador não entram mais nessa exceção: passaram todas para o Traefik (`<svc>.<eip>.sslip.io`).
 
 ## Labels dos nós (Swarm)
 
@@ -313,14 +408,10 @@ File Browser em `/files?path=/buckets/<nome>`, lista em `/object-store/buckets`.
 normalmente (confirmável via S3 API `GET http://<ip-node-1>:8333/` ou no filer em `/buckets/<nome>`) — é
 só o link da UI que está errado, não dá pra corrigir sem mexer no binário upstream.
 
-**SeaweedFS Admin: login "não funciona" pelo IP/EIP (volta pro `/login` depois de autenticar), mas funciona
-via `localhost`.** O `weed admin` marca o cookie de sessão como **`Secure`** — só trafega por HTTPS. Em HTTP
-puro, o navegador só envia cookie Secure para `localhost` (contexto seguro); por qualquer outro host (IP/EIP)
-ele não envia, e o `/admin` chuta de volta pro `/login`. Fix: o serviço `seaweedfs-admin` roda com TLS
-habilitado via `config/seaweedfs/security.toml` (`[https.admin]` apontando pra `config/seaweedfs/tls/`),
-então acesse por **`https://<ip-node-1>:23646`** (cert self-signed — o navegador avisa, é só prosseguir).
-Workaround sem HTTPS: túnel SSH `ssh -L 23646:localhost:23646 root@<eip>` e abrir
-`http://localhost:23646`.
+**SeaweedFS Admin: cookie de sessão `Secure` (histórico).** O `weed admin` marca o cookie como **`Secure`**
+(só trafega por HTTPS) — o que quebrava o acesso por IP em HTTP puro. Isso deixou de ser um problema: o
+acesso agora é sempre por `https://seaweedfs.<eip>.sslip.io` (Traefik termina TLS), então o cookie
+Secure trafega normalmente. A porta 23646 não é mais publicada no host.
 
 ## Alta disponibilidade
 
@@ -329,27 +420,45 @@ Workaround sem HTTPS: túnel SSH `ssh -L 23646:localhost:23646 root@<eip>` e abr
 
 ## Servicos apos deploy
 
-| Servico | URL |
-|---|---|
-| Portainer | https://<ip-node-1>:9443 |
-| Swarmpit | http://<ip-node-1>:888 |
-| Spark UI | http://<ip-node-1>:8090 |
-| Spark History Server | http://<ip-node-1>:18081 |
-| Trino UI | http://<ip-node-1>:8080 |
-| JupyterHub | http://<ip-node-1>:8000 |
-| Superset | http://<ip-node-1>:8088 |
-| SeaweedFS UI (master) | http://<ip-node-1>:9333 |
-| SeaweedFS Admin (dashboard c/ login) | https://<ip-node-1>:23646 |
-| S3 API | http://<ip-node-1>:8333 |
-| Keycloak (SSO / admin master `admin`) | https://keycloak.<eip>.sslip.io |
-| Trino (via Traefik, OAuth2) | https://trino.<eip>.sslip.io |
-| JupyterHub (via Traefik, OIDC) | https://jupyter.<eip>.sslip.io |
-| SeaweedFS Admin (via Traefik, SSO) | https://seaweedfs.<eip>.sslip.io |
-| Traefik Dashboard (read-only) | https://traefik.<eip>.sslip.io/dashboard/ |
+Todos os acessos de navegador são via Traefik (HTTPS/443) com login pelo Keycloak (usuário `superadmin` —
+ver "Identidade única"). As antigas URLs por IP:porta cru **não existem mais** (portas fechadas). Login
+único: autenticado num dos hosts do forward-auth, os demais desse grupo não pedem login de novo.
+
+| Servico | URL | Auth |
+|---|---|---|
+| Keycloak (IdP; console admin usa `admin` do realm master) | https://keycloak.<eip>.sslip.io | — |
+| Trino | https://trino.<eip>.sslip.io | OIDC nativo (OAuth2) |
+| JupyterHub | https://jupyter.<eip>.sslip.io | OIDC nativo |
+| Superset | https://superset.<eip>.sslip.io | OIDC nativo |
+| Airflow | https://airflow.<eip>.sslip.io | OIDC nativo |
+| Portainer | https://portainer.<eip>.sslip.io | OIDC nativo † |
+| Spark Master UI | https://spark.<eip>.sslip.io | SSO (forward-auth) |
+| Spark History Server | https://spark-history.<eip>.sslip.io | SSO (forward-auth) |
+| SeaweedFS Admin (dashboard) | https://seaweedfs.<eip>.sslip.io | SSO (forward-auth) |
+| SeaweedFS Filer UI | https://seaweedfs-filer.<eip>.sslip.io | SSO (forward-auth) |
+| SeaweedFS Master UI | https://seaweedfs-master.<eip>.sslip.io | SSO (forward-auth) |
+| Swarmpit | https://swarmpit.<eip>.sslip.io | SSO (forward-auth) + login interno ‡ |
+| Traefik Dashboard (read-only) | https://traefik.<eip>.sslip.io/dashboard/ | SSO (forward-auth) |
+| S3 API (não-navegador; assinatura S3) | http://<ip-node-1>:8333 | chave/segredo S3 |
+
+† Portainer: o login OIDC está configurado mas o passo final (ativar OAuth na UI) depende da senha do admin
+interno — ver "Pendências". ‡ Swarmpit exige login interno próprio além do gate SSO (login duplo).
 
 TLS nas URLs `sslip.io` é **self-signed** (o navegador avisa; prossiga). `<svc>.<eip>.sslip.io`
 resolve para o EIP sem DNS próprio — ver CLAUDE.md ("SSO / Ingress") para o padrão de hairpin (browser usa a
 URL externa; chamadas internas de um serviço para o Keycloak usam `http://keycloak:8080`).
+
+## Pendências
+
+- **Portainer OAuth**: o client Keycloak `portainer` e o router Traefik já existem, mas ativar o OAuth na UI
+  do Portainer (Settings → Authentication → OAuth) exige logar com o admin interno, cuja senha não está
+  documentada. Enquanto isso, as portas 9000/9443 seguem publicadas no host. Depois de confirmar o login
+  OAuth, remover essas portas do `stacks/08-apps-stack.yml` e redeploy `apps`.
+- **Swarmpit**: mantém login interno próprio (login duplo) e seu CouchDB roda sem autenticação própria
+  (`COUCHDB_USER`/`PASSWORD` nunca definidos) — não publicado no host, mas vale endurecer numa próxima etapa.
+- **Segredos placeholder vivos**: os `_CHANGE_ME` do repo público (client-secret do oauth2-proxy, cookie
+  secret, senhas de DB/admin) estão em uso real; o Security Group (origem única) é o que torna isso
+  tolerável. Rotacionar antes de abrir o acesso.
 
 ## Storage - SeaweedFS
 
@@ -358,13 +467,13 @@ URL externa; chamadas internas de um serviço para o Keycloak usam `http://keycl
 - **Capacidade usavel:** ~4.5 TB com replicacao 2x
 - **S3 endpoint:** http://<ip-node-1>:8333 externo, ou `http://seaweedfs-filer-1:8333` de dentro de outro
   container no `datastack-net` (sem autenticacao na rede interna)
-- **Admin Dashboard:** https://<ip-node-1>:23646 — UI de administracao com login (volumes, buckets do
-  Object Store, users/policies do S3, file browser, metricas, logs). Usuario `admin`, senha definida em
-  `-adminPassword` no serviço `seaweedfs-admin` (`stacks/05-seaweedfs-stack.yml`; placeholder
-  `seaweedfs_admin_CHANGE_ME`). O subcomando `admin` so existe a partir do SeaweedFS 3.80 — por isso esse
-  serviço usa a imagem `3.95` enquanto o resto do cluster segue na `3.65` (o admin fala com os masters via
-  gRPC, compativel). Se `-adminPassword` ficar vazio, a autenticacao e desabilitada. Roda em **HTTPS**
-  (cert self-signed) por causa do cookie Secure — ver Troubleshooting.
+- **Admin Dashboard:** https://seaweedfs.<eip>.sslip.io (via Traefik + SSO forward-auth) — UI de
+  administracao (volumes, buckets do Object Store, users/policies do S3, file browser, metricas, logs). O
+  login agora é o SSO do Keycloak; o `-adminPassword` interno do `weed admin` (placeholder
+  `seaweedfs_admin_CHANGE_ME` em `stacks/05-seaweedfs-stack.yml`) segue existindo como camada da própria
+  ferramenta, mas o acesso externo é gated pelo oauth2-proxy. A porta 23646 **não é mais publicada no host**.
+  O subcomando `admin` so existe a partir do SeaweedFS 3.80 — por isso esse serviço usa a imagem `3.95`
+  enquanto o resto do cluster segue na `3.65` (o admin fala com os masters via gRPC, compativel).
 
   **Antes do deploy**, gere o par de certificados TLS do admin (nao vao versionados; ver `.gitignore`):
   ```bash
