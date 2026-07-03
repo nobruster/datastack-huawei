@@ -439,6 +439,24 @@ at runtime (done a lot this session) is **not** in the file until reconciled —
 re-import silently loses it. Keycloak redirect-URI **wildcards don't match a subdomain** (`https://*.<eip>...`
 did not match `seaweedfs.<eip>...`); list the explicit callback URL per service.
 
+**Single-identity model: `superadmin` (realm `datastack`) is the one administrative account for every UI.**
+It carries all three realm roles (`user`, `superset_admin`, `airflow_admin`), which the per-tool
+`AUTH_ROLES_MAPPING` (Superset, Airflow) turns into that tool's own `Admin` role at login, and it's also
+listed in JupyterHub's `admin_users` (hub-admin, not a role-mapping — GenericOAuthenticator has no realm-role
+concept). Portainer's OAuth (separate effort) resolves the same way via `preferred_username`. Its password is
+**not versioned anywhere** (real value only lives in the running Keycloak, deliberately, unlike the
+`_CHANGE_ME` placeholders elsewhere in this repo). Exceptions to "one identity everywhere": (1) **Swarmpit**
+keeps its own internal CouchDB-backed login on top of the SSO forward-auth gate — a real double login, no
+role/claim from Keycloak reaches it, and there is currently no safe way to provision a matching `superadmin`
+account there (its single seeded `admin` user's password is unknown, and the app's own login API doesn't
+expose enough to tell a bad password from a malformed request — do **not** "fix" this by writing to its
+CouchDB directly, even though that CouchDB currently runs with no auth of its own; that's a much bigger,
+separate problem). (2) The **Keycloak admin console itself** (`/admin/master/console`) is reached with the
+realm-`master` `admin` user, not `superadmin` — `superadmin` is a `datastack`-realm user account, not a
+Keycloak administrator. (3) **Trino** and the oauth2-proxy-fronted UIs (Spark UI, Spark History, SeaweedFS
+Admin, Swarmpit's outer gate, Traefik dashboard) have no per-user RBAC at all — any authenticated realm user,
+`superadmin` included, gets the same access; there's no "admin" distinction to grant there.
+
 ## Spark → SeaweedFS (S3A): the working recipe and its traps
 
 The stack ships hadoop-aws-3.3.4 + aws-java-sdk-bundle in the Spark image, and `spark-defaults.conf` points
