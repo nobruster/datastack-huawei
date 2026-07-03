@@ -280,6 +280,46 @@ Known Gotchas below) the `docker exec` fails and `set -e` aborts the script befo
 `init` ever ran, leaving the DB schema empty with no error surfaced beyond the aborted deploy log. Fixed to
 `-f "name=^apps_superset\."` (anchored, matches only `apps_superset.<replica>.<hash>`).
 
+## Superset SSO via Keycloak — custom image, and a volume-shadowing trap
+
+Superset authenticates via Flask-AppBuilder's native `AUTH_OAUTH` against Keycloak (same hairpin pattern as
+Trino/JupyterHub: browser uses the external `https://keycloak...sslip.io` URL for `authorize_url`; the
+back-channel — token/userinfo, called by the Superset container itself — uses `http://keycloak:8080`
+internal). Config lives in `config/superset/superset_config.py` (`OAUTH_PROVIDERS` + a
+`KeycloakSecurityManager` overriding `oauth_user_info`, since FAB has no built-in Keycloak provider and only
+knows how to parse known ones like Google/GitHub). New Keycloak client `superset`
+(`redirectUris: https://superset.<eip>.sslip.io/oauth-authorized/keycloak`), plus a
+`superset-audience`-style realm role `superset_admin` mapped to Superset's `Admin` role via
+`AUTH_ROLES_MAPPING` — requires a protocol mapper (`oidc-usermodel-realm-role-mapper`) on the client to
+expose `realm_access.roles` in `/userinfo`, since Keycloak doesn't include realm roles there by default.
+Traefik got a new router (`config/traefik/dynamic/dynamic.yml`, `superset` → `http://superset:8088`).
+
+- **`Authlib` is a hard requirement for `AUTH_TYPE = AUTH_OAUTH`** (`from authlib.integrations.flask_client
+  import OAuth`) and isn't in the official `apache/superset:3.1.3` image. Same fix pattern as JupyterHub's
+  `datastack/jupyterhub:4.1-oidc`: a locally-built image, `datastack/superset:3.1.3-oidc`
+  (`config/superset/Dockerfile`), pinned to node-1 in `08-apps-stack.yml` (no registry). Also pin
+  `cryptography>=42.0.4,<43.0.0` explicitly — Authlib alone pulls the latest `cryptography` (49.x), which
+  violates `apache-superset`'s own `<43.0.0` constraint.
+- **`RUN pip install ...` in the Dockerfile must run as root, not the image's default `superset` user.**
+  Without `USER root` before the install (and `USER superset` after, to restore it), pip silently falls back
+  to a `--user` install because `superset` can't write to the system site-packages — landing Authlib under
+  `/app/superset_home/.local/lib/...`. That path is *exactly* the mount point of the `superset-data` named
+  volume (`volumes: - superset-data:/app/superset_home`), so at runtime the volume shadows whatever got
+  baked into the image there, and the container boots with `ModuleNotFoundError: No module named 'authlib'`
+  — even though `docker run` against the same image *without* the volume mounted shows the module present
+  and importable. This is a general trap for any custom image built on top of a service that also gets a
+  named-volume mount: verify `pip show <pkg>`'s install location isn't under a path the stack later mounts
+  a volume onto, not just that the import succeeds in an unmounted test container.
+- Both `config/superset/Dockerfile` and `config/jupyterhub/Dockerfile` are now committed to the repo (the
+  JupyterHub one previously only existed at `/tmp/jhbuild/Dockerfile` on node-1 — lost if the VM were ever
+  rebuilt). Build: `docker build -t datastack/superset:3.1.3-oidc config/superset/`.
+- **Keycloak's `--import-realm` only imports a realm that doesn't already exist** (`Realm 'datastack'
+  already exists. Import skipped` in the boot log) — it does **not** upsert/merge on restart. Adding a new
+  client to `realm-datastack.json` and restarting Keycloak does nothing to an already-provisioned realm; the
+  change has to be applied live via the Admin REST API (`POST .../admin/realms/datastack/clients`, etc.) to
+  take effect on the running cluster, same as any other admin-API-created object per the "session state
+  drifts" note above. The JSON file is still correct/authoritative for a *fresh* deploy (empty DB).
+
 ## Known gotchas
 
 - **`restart_policy.condition` must be `any` for every long-running service.** With `on-failure`, a clean

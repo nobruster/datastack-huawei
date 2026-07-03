@@ -58,9 +58,15 @@ services:
   # APACHE SUPERSET
   # =============================================
   superset:
-    image: apache/superset:3.1.3
+    # Imagem custom (build local no node-1): apache/superset 3.1.3 + Authlib
+    # (obrigatorio para AUTH_OAUTH/SSO via Keycloak; nao vem na imagem
+    # oficial). Ver config/superset/Dockerfile. Nao esta em registry, entao
+    # fica pinado no node-1 (onde a imagem existe) - mesmo padrao do
+    # datastack/jupyterhub:4.1-oidc.
+    image: datastack/superset:3.1.3-oidc
     environment:
       - SUPERSET_SECRET_KEY=superset_secret_CHANGE_ME
+      - SUPERSET_OIDC_CLIENT_SECRET=superset-oidc-secret-CHANGE-ME
       - REDIS_URL=redis://redis:6379/0
       - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://superset:superset_password_CHANGE_ME@postgres:5432/superset
       - SUPERSET_WEBSERVER_PORT=8088
@@ -91,10 +97,11 @@ services:
   # SUPERSET WORKER (Celery para cache/queries async)
   # =============================================
   superset-worker:
-    image: apache/superset:3.1.3
+    image: datastack/superset:3.1.3-oidc
     command: celery --app=superset.tasks.celery_app:app worker --loglevel=info
     environment:
       - SUPERSET_SECRET_KEY=superset_secret_CHANGE_ME
+      - SUPERSET_OIDC_CLIENT_SECRET=superset-oidc-secret-CHANGE-ME
       - REDIS_URL=redis://redis:6379/0
       - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://superset:superset_password_CHANGE_ME@postgres:5432/superset
       - PYTHONPATH=/app/pythonpath

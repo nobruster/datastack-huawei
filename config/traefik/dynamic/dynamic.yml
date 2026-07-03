@@ -44,6 +44,13 @@ http:
       service: jupyter
       tls: {}
 
+    # --- Superset (auth OIDC nativa via Flask-AppBuilder AUTH_OAUTH). ---
+    superset:
+      rule: "Host(`superset.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: superset
+      tls: {}
+
     # --- Dashboard do proprio Traefik (api@internal = read-only: mostra
     #     routers/services/middlewares, nao altera config). Acesso restrito
     #     pelo Security Group (origem unica). Dashboard fica em /dashboard/. ---
@@ -70,3 +77,7 @@ http:
       loadBalancer:
         servers:
           - url: "http://jupyterhub:8000"
+    superset:
+      loadBalancer:
+        servers:
+          - url: "http://superset:8088"
