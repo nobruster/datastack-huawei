@@ -3,3 +3,9 @@
 config/seaweedfs/tls/
 config/traefik/tls/
 __pycache__/
+
+# Valores reais do site (EIP/IPs privados) usados por scripts/render-to-opt.sh.
+# So deve existir em /opt/datastack/.site.env no node-1 (chmod 600), nunca
+# dentro do repo - esta entrada e so uma rede de seguranca contra commit
+# acidental caso alguem crie/copie o arquivo para dentro do checkout do repo.
+.site.env

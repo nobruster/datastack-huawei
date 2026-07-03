@@ -229,6 +229,44 @@ Esquema tem que ser **`s3a://`** (não `s3://`) — ver CLAUDE.md para o porquê
 O repositório deve ser clonado em **`/opt/datastack`** em node-1 — `09-deploy-all.sh` e `07-sync-config.sh`
 assumem esse caminho.
 
+## Repo público: placeholders vs. valores reais (`.site.env` + `render-to-opt.sh`)
+
+Este repositório (`github.com/nobruster/datastack-huawei`) é **público**. Todo IP real (EIP, IP privado de
+cada nó, subnet privada) aparece só como placeholder literal — `<eip>`, `<ip-node-1>`, `<ip-node-2>`,
+`<ip-node-3>`, `<subnet-privada>` — em `stacks/`, `config/`, `scripts/`, `README.md` e `CLAUDE.md`. Um `cp -r`
+puro do repo para `/opt/datastack` instalaria essas strings literais num arquivo de config ativo e quebraria
+o serviço.
+
+**Deploy novo (primeira vez em node-1):**
+
+```bash
+git clone <repo> /opt/datastack
+# Crie o arquivo com os valores reais - existe SO no node-1, nunca no repo:
+cat > /opt/datastack/.site.env <<'EOF'
+EIP=<eip-real>
+IP_NODE_1=<ip-real-node-1>
+IP_NODE_2=<ip-real-node-2>
+IP_NODE_3=<ip-real-node-3>
+SUBNET_PRIVADA=<subnet-real>
+EOF
+chmod 600 /opt/datastack/.site.env
+
+# Renderiza o repo por cima de si mesmo, substituindo os placeholders:
+cd /opt/datastack && ./scripts/render-to-opt.sh
+```
+
+**Depois de qualquer edição no repo**, sempre rode `scripts/render-to-opt.sh` (nunca um `cp`/`git pull` puro
+seguido de deploy direto) antes de `07-sync-config.sh`/`09-deploy-all.sh`/`docker service update --force`.
+Use `--check` para ver o diff sem aplicar nada:
+
+```bash
+cd /opt/datastack && git pull
+./scripts/render-to-opt.sh --check   # mostra o que vai mudar, nao toca em /opt/datastack
+./scripts/render-to-opt.sh           # aplica de fato
+```
+
+Detalhes (arquivos protegidos com segredo real, o que o script preserva/apaga) estão no CLAUDE.md.
+
 ## PostgreSQL é containerizado
 
 Não existe mais serviço nativo/instalado no host — todo o stack roda em Docker. PostgreSQL é o serviço
@@ -254,6 +292,7 @@ docker swarm join --token <TOKEN> <ip-node-1>:2377
 
 # 4. Somente no node-1
 bash scripts/03-swarm-networks.sh
+./scripts/render-to-opt.sh   # placeholders -> valores reais de .site.env (ver secao acima)
 bash scripts/07-sync-config.sh
 bash scripts/09-deploy-all.sh
 ```

@@ -7,6 +7,12 @@ set -e
 # As stacks (06-datastack.yml) fazem bind mount de /opt/datastack/config/...
 # Como bind mounts do Swarm sao locais a cada no, essa pasta precisa
 # existir identica em node-1, node-2 e node-3 antes do deploy.
+#
+# PRE-REQUISITO: rode scripts/render-to-opt.sh ANTES deste script. Este
+# script so copia bytes (rsync puro, sem substituicao) - ele sincroniza o
+# lado node-1 de config/, que so tem valores reais (placeholders resolvidos
+# + segredos reais do Trino) depois do render. Rodar isto direto apos um
+# `git pull`/`cp` cru replicaria placeholders literais para node-2/node-3.
 # ============================================================
 
 REPO_DIR="/opt/datastack"

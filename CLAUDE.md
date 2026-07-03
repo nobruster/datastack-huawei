@@ -57,6 +57,40 @@ There used to be a `04-postgresql.sh` that installed PostgreSQL natively on node
 is now the `postgres` service inside `06-datastack.yml` (see "PostgreSQL is containerized" below). If you
 see a reference to `04-postgresql.sh` anywhere (old docs, muscle memory), it's stale.
 
+## Repo is public: placeholders vs. real values (`scripts/render-to-opt.sh`)
+
+This repo (`github.com/nobruster/datastack-huawei`) is **public**. Since 2026-07-04 every real IP — EIP,
+each node's private IP, the private subnet — is scrubbed from git history and replaced with literal
+placeholders: `<eip>`, `<ip-node-1>`, `<ip-node-2>`, `<ip-node-3>`, `<subnet-privada>`, present throughout
+`stacks/`, `config/`, `scripts/`, `README.md`, and this file. Real values live in **exactly one place**:
+`/opt/datastack/.site.env` on node-1 (git-ignored, `chmod 600`, 5 `KEY=value` lines) — never commit real
+values anywhere, not even in a throwaway branch or a script comment.
+
+The old workflow ("edit the repo, then `cp`/rsync it onto `/opt/datastack`") is retired — a plain copy now
+installs the literal string `<eip>` into a live bind-mounted config and breaks the service it's mounted
+into. `scripts/render-to-opt.sh` replaces that step: it copies the versioned tree (`stacks/`, `config/`,
+`scripts/`, `dags/`, `jobs/`, `notebooks/`, `README.md`, `CLAUDE.md`) into `/opt/datastack` and substitutes
+the 5 placeholders with the values from `.site.env`, touching only text files that actually contain a
+placeholder (binaries — `.jar`/`.crt`/`.key` — are never touched). It never deletes anything at the target
+that isn't in the repo (no `rsync --delete`), so non-versioned material already on the node — TLS certs
+under `config/traefik/tls`/`config/seaweedfs/tls`, `__pycache__` — survives untouched. **Run it after every
+edit to the repo**, before `07-sync-config.sh`/`09-deploy-all.sh`/any `docker service update --force`.
+
+Two files are permanently excluded from the copy, even though they're versioned and do contain a
+placeholder secret in git (`*-CHANGE-ME`): `config/trino/coordinator/config.properties` and
+`config/trino/worker/config.properties`. Their real OAuth2 `client-secret` and
+`internal-communication.shared-secret` were set by hand directly on node-1 and were never committed (see
+"Placeholder secrets are LIVE in the SSO path" above) — copying the repo's placeholder version over them
+would silently break Trino's OAuth2 login and desync the coordinator/worker shared secret. A literal
+`<eip>`/`<ip-node-N>` token inside those two files (e.g. in a comment) still gets substituted like anywhere
+else — only the wholesale repo copy is skipped, not placeholder substitution.
+
+Validate before trusting a render: `scripts/render-to-opt.sh --check` renders into a temp dir and diffs it
+against `/opt/datastack` without touching anything real — read every line of that diff before running the
+same command without `--check`. A file differing only by placeholder-vs-real-value is expected; a file
+differing any other way means either the deployed copy has drifted from git HEAD (fine — the real run will
+catch it up) or something is wrong (stop and investigate, don't blindly apply).
+
 ## The one rule that explains most bugs found here: use Swarm service DNS names
 
 Every service-to-service connection string in this repo (Postgres URLs, Hive Metastore URIs, S3 endpoints,
