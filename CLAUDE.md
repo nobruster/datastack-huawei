@@ -236,6 +236,10 @@ current architecture, not a bug to silently "fix" by removing constraints (remov
 bind-mount assumption above). A full Postgres cluster (streaming replication + failover) was evaluated and
 explicitly deferred as a separate, larger project — don't add it unprompted.
 
+The full topology/placement analysis (measured inventory 2026-07-04, per-tool official-doc recommendations,
+and a prioritized HA plan) lives in `docs/node-placement.md` — read it before proposing to move any service
+between nodes.
+
 ## Spark Master HA via ZooKeeper (`stacks/13-zookeeper.yml`)
 
 The single-instance `spark-master` service is gone — replaced by `spark-master-1/2/3` (one per node,

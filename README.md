@@ -134,6 +134,7 @@ Ressalva: um **container de notebook já aberto não ganha o mount novo** — va
 datastack-huawei/
 ├── README.md
 ├── CLAUDE.md                     # Guia detalhado de arquitetura, invariantes e troubleshooting
+├── docs/                         # Estudos/documentos de referência (ex.: node-placement.md — topologia/placement)
 ├── scripts/
 │   ├── 00-ssh-setup.sh           # Configura SSH sem senha do node-1 para node-2/node-3
 │   ├── 01-base-setup.sh          # Setup base (Docker, disco, hosts) - todos os nos
@@ -484,6 +485,8 @@ Secure trafega normalmente. A porta 23646 não é mais publicada no host.
   único para Traefik (ingress único), Keycloak (único IdP) e Airflow (scheduler/dag-processor/triggerer).
   Isso é uma limitação de arquitetura atual, não um bug — um Postgres em cluster (replicação + failover) foi
   avaliado e propositalmente adiado como projeto separado.
+- **Distribuição de serviços entre nós (topologia/placement):** análise medida em 2026-07-04 (placement é são;
+  o eixo é SPOF, não recurso) e plano priorizado de HA em [`docs/node-placement.md`](docs/node-placement.md).
 
 ## Servicos apos deploy
 
