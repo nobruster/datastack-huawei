@@ -132,17 +132,14 @@ services:
   portainer:
     image: portainer/portainer-ce:2.20.3
     command: -H unix:///var/run/docker.sock
-    # 9000/9443 MANTIDAS abertas de proposito: OAuth OIDC nativo do Portainer
-    # (client Keycloak "portainer" + router Traefik ja prontos) nao pode ser
-    # confirmado funcionando porque a senha do admin interno do Portainer nao
-    # e conhecida (varios candidatos plausiveis testados via POST /api/auth,
-    # todos rejeitados/bloqueados por brute-force protection). Ver relatorio
-    # para o passo-a-passo de configurar OAuth manualmente na UI
-    # (Settings > Authentication > OAuth) - so fechar estas portas depois
-    # disso confirmado.
-    ports:
-      - "9000:9000"
-      - "9443:9443"
+    # 9000/9443 fechadas (2026-07-04): acesso via https://portainer.<eip>.sslip.io
+    # (Traefik) com OAuth OIDC nativo do Portainer -> Keycloak (client "portainer",
+    # UserIdentifier=preferred_username; login OAuth validado ponta a ponta via
+    # authorization-code flow). A config OAuth vive no banco do Portainer
+    # (volume portainer-data), aplicada via PUT /api/settings - nao neste YML.
+    # Fallback anti-lockout: com OAuth ativo o Portainer CE so permite login
+    # interno do ADMIN INICIAL ("admin") - usuarios internos criados depois
+    # (ex. "superadmin") logam apenas via OAuth.
     volumes:
       - portainer-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
