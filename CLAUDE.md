@@ -261,6 +261,16 @@ CALL delta.system.register_table(schema_name => 'ouro', table_name => 'fat_uf',
 Presto/PrestoS3FileSystem, which used to accept `s3`/`s3n`/`s3a` interchangeably. Always match the scheme
 Spark used to write (`s3a://`).
 
+**Internal (service) clients — e.g. Superset — connect over plain HTTP without OAuth2:**
+`http-server.authentication.allow-insecure-over-http=true` is set on the coordinator (a service has no
+browser for the OAuth2 flow, and a container can't reach the EIP anyway). Plain-HTTP requests are
+unauthenticated — the "user" is just the declared `X-Trino-User` header — while external access via Traefik
+(HTTPS, `X-Forwarded-Proto=https`) still requires OAuth2. Trust model = overlay network + Security Group,
+same as Postgres/SeaweedFS/Redis. Superset's SQLAlchemy URI (needs the `trino[sqlalchemy]` pip package,
+baked into `datastack/superset:3.1.3-oidc`): `trino://superset@trino-coordinator:8080/delta`. If
+service-level auth is ever wanted, PASSWORD authenticators require internal TLS too (Trino refuses password
+auth over plain HTTP) — a separate project.
+
 ## Superset: DB schema must be migrated, and the init container filter was ambiguous
 
 If `/superset/welcome/` (or any page) 500s with `psycopg2.errors.UndefinedTable: relation "user_attribute"
