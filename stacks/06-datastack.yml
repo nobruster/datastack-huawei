@@ -136,6 +136,16 @@ services:
       # nos Spark ou executor falha com ClassNotFound.
       - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
       - spark_logs:/opt/bitnami/spark/logs
+      # Pasta compartilhada de CODIGO (nao dados) entre Jupyter (/home/jovyan/shared),
+      # spark-master (/opt/shared) e Airflow (/opt/shared) - mesmo /data/shared do
+      # host (sticky 1777) montado nos 3. DADOS trafegam via s3a:// SEMPRE: os
+      # executores em node-2/node-3 nao enxergam o disco local do node-1, so o
+      # driver (que roda aqui, no master, via spark-submit) enxergaria /opt/shared.
+      - /data/shared:/opt/shared
+      # Jobs .py do Airflow (ro): permite os DAGs referenciarem o job direto por
+      # caminho (/opt/datastack/jobs/<job>.py) no spark-submit, sem `docker cp`
+      # previo (o scheduler ja monta o mesmo /opt/datastack/jobs, tambem ro).
+      - /opt/datastack/jobs:/opt/datastack/jobs:ro
     # 8090 (UI) fechada: acesso agora via https://spark.<eip>.sslip.io
     # (Traefik + SSO). 7077 (RPC do master, usado por spark-submit/workers de
     # fora do overlay) continua publicada.

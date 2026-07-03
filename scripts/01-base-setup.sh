@@ -55,6 +55,11 @@ fi
 # Cria diretorios de dados
 mkdir -p /data/seaweedfs/master /data/seaweedfs/volume /data/seaweedfs/filer
 mkdir -p /data/postgres /data/jupyter /data/spark /data/trino
+# Pasta compartilhada de CODIGO (nao dados) entre Jupyter/Spark-master/Airflow
+# (node-1 only). Sticky bit (1777) porque uids diferentes escrevem nela
+# (jovyan=1000, bitnami spark=1001, airflow scheduler=root).
+mkdir -p /data/shared
+chmod 1777 /data/shared
 
 # Ajusta limites do sistema
 cat >> /etc/sysctl.conf << SYSCTLEOF

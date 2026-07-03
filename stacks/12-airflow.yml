@@ -1,0 +1,214 @@
+version: "3.8"
+
+# =============================================================================
+# APACHE AIRFLOW 3.0.6 - orquestrador dos jobs Spark (LocalExecutor)
+# =============================================================================
+# Imagem custom datastack/airflow:3.0-oidc (config/airflow/Dockerfile), buildada
+# LOCAL no node-1 (sem registry) -> todos os servicos pinados no node-1, mesmo
+# padrao de datastack/superset e datastack/jupyterhub. node-2/node-3 nao tem
+# egress e nao teriam a imagem.
+#
+# Componentes do Airflow 3 (arquitetura nova: apiserver FastAPI + dag-processor
+# obrigatorio separado):
+#   - airflow-apiserver   : UI + REST API (FastAPI), porta 8080 (NAO publicada no
+#                           host; acesso so via Traefik -> router `airflow`).
+#   - airflow-scheduler    : agenda E executa as tasks (LocalExecutor). Roda como
+#                            root (user "0:0") p/ usar /var/run/docker.sock e
+#                            fazer `docker exec` no spark-master (mesmo trust model
+#                            do Portainer/Swarmpit). Monta dags, jobs (ro) e a
+#                            pasta compartilhada.
+#   - airflow-dag-processor: parseia os DAGs (obrigatorio no Airflow 3).
+#   - airflow-triggerer     : executa deferrable operators (leve).
+#
+# DB migrate: NAO ha servico de init aqui. Roda-se UMA VEZ, manualmente, antes do
+# primeiro deploy (documentado abaixo) - assim `docker service ls` fica limpo
+# (todos os airflow_* em 1/1, sem um servico "Complete" 0/1). Comando (no node-1,
+# imagem local, rede overlay p/ alcancar o postgres, e inicializa perms do volume
+# de logs p/ os servicos que rodam como uid 50000):
+#
+#   # (a) tabelas core do Airflow + perms do volume de logs:
+#   docker run --rm --network datastack-net --user 0:0 \
+#     --mount type=volume,source=airflow_airflow-logs,target=/opt/airflow/logs \
+#     -e AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow_password_CHANGE_ME@postgres:5432/airflow \
+#     datastack/airflow:3.0-oidc bash -c \
+#     'airflow db migrate && mkdir -p /opt/airflow/logs && chown -R 50000:0 /opt/airflow/logs && chmod -R 775 /opt/airflow/logs'
+#
+#   # (b) OBRIGATORIO tambem: tabelas do FAB auth manager (ab_user, ab_role, ...).
+#   #     `airflow db migrate` NAO as cria no Airflow 3 - sem isto o login falha.
+#   docker run --rm --network datastack-net --user 0:0 \
+#     -e AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow_password_CHANGE_ME@postgres:5432/airflow \
+#     -e AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager \
+#     datastack/airflow:3.0-oidc airflow fab-db migrate
+#
+# (O nome do volume vira airflow_airflow-logs porque a stack se chama `airflow`.)
+# =============================================================================
+
+x-airflow-common: &airflow-common
+  image: datastack/airflow:3.0-oidc
+  networks:
+    - datastack-net
+  volumes:
+    # Config do FAB auth manager (SSO OIDC). [fab] config_file default da imagem
+    # 3.0.6 = /opt/airflow/webserver_config.py (confirmado via `airflow config list`).
+    - /opt/datastack/config/airflow/webserver_config.py:/opt/airflow/webserver_config.py:ro
+    # Logs compartilhados entre os componentes (todos no node-1): o scheduler
+    # (root) escreve os logs das tasks e o apiserver (uid 50000) os le na UI.
+    - airflow-logs:/opt/airflow/logs
+  deploy:
+    placement:
+      constraints:
+        - node.labels.name == node-1
+    restart_policy:
+      condition: any
+      delay: 10s
+
+x-airflow-env: &airflow-common-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow_password_CHANGE_ME@postgres:5432/airflow
+  # Fernet key: valor literal VALIDO (formato exigido) - CHANGE_ME (rotacionar
+  # antes de producao; repo e publico). Criptografa connections/variables no DB.
+  AIRFLOW__CORE__FERNET_KEY: "ON-T5_9dwOgNOhLKhTtgAAhq1AYO0BmaWP8MSKpjax8="  # CHANGE_ME
+  # JWT das chamadas internas (scheduler<->apiserver<->execution API). TEM que ser
+  # identico em todos os componentes. Valor literal valido - CHANGE_ME.
+  AIRFLOW__API_AUTH__JWT_SECRET: "So9-6juA62GLpj4I-hA6dtztKdvj6G8sfOdFoFU1Pz0CLDZYjtqsBEIetnhjoz7"  # CHANGE_ME
+  # Secret de sessao do apiserver (Flask/FastAPI) - estabilidade de sessao entre
+  # restarts. Valor literal valido - CHANGE_ME.
+  AIRFLOW__API__SECRET_KEY: "bc7Dwd1YQnAFPOFAeatvc6S_VBk0OTIGFTHqSsHm54Q"  # CHANGE_ME
+  # URL publica (o apiserver "nao adivinha" o dominio/CNAME - doc 3.0). Usada em
+  # links e no fluxo OAuth (redirect). Traefik termina TLS.
+  AIRFLOW__API__BASE_URL: "https://airflow.<eip>.sslip.io"
+  # Auth manager = FAB (le webserver_config.py, suporta AUTH_OAUTH/SSO).
+  AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+  AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+  # Confia nos headers X-Forwarded-* do Traefik (TLS termina la). Secao [fab],
+  # key enable_proxy_fix (confirmado via `airflow config list`).
+  AIRFLOW__FAB__ENABLE_PROXY_FIX: "True"
+  # Sessao web do FAB em cookie assinado (securecookie), NAO em tabela do DB.
+  # O default 'database' exige a tabela `session`, que nem `airflow db migrate`
+  # nem `airflow fab-db migrate` criam no Airflow 3 -> /auth/login/ dava 500
+  # (UndefinedTable: relation "session"). securecookie e o backend leve/oficial
+  # (doc do provider FAB), suficiente p/ o fluxo SSO; estavel entre restarts por
+  # causa do AIRFLOW__API__SECRET_KEY fixo acima.
+  AIRFLOW__FAB__SESSION_BACKEND: "securecookie"
+  # Segredo do client OIDC 'airflow' no Keycloak (lido pelo webserver_config.py).
+  AIRFLOW_OIDC_CLIENT_SECRET: "airflow-oidc-secret-CHANGE-ME"
+
+services:
+  # ---------------------------------------------------------------------------
+  # API server (UI + REST). Porta 8080 NAO publicada: acesso so via Traefik.
+  # ---------------------------------------------------------------------------
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    environment:
+      <<: *airflow-common-env
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Scheduler - agenda e EXECUTA as tasks (LocalExecutor). Roda como root p/
+  # acessar o docker.sock e fazer `docker exec` no spark-master.
+  # ---------------------------------------------------------------------------
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    user: "0:0"
+    environment:
+      <<: *airflow-common-env
+    volumes:
+      - /opt/datastack/config/airflow/webserver_config.py:/opt/airflow/webserver_config.py:ro
+      - airflow-logs:/opt/airflow/logs
+      # DAGs (o proximo agente cria os DAGs dos jobs Spark aqui).
+      - /opt/datastack/dags:/opt/airflow/dags
+      # Socket do Docker: o scheduler roda `docker exec` no container do
+      # spark-master p/ submeter os jobs (o agente dos DAGs vai usar isso).
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Jobs .py (ro): os DAGs fazem `docker cp` deles p/ dentro do spark-master.
+      - /opt/datastack/jobs:/opt/datastack/jobs:ro
+      # Pasta compartilhada de CODIGO (jobs .py) entre Jupyter (/home/jovyan/shared),
+      # spark-master (/opt/shared) e Airflow (/opt/shared). Sticky 1777 no host
+      # (/data/shared) porque UIDs diferentes escrevem (jovyan=1000, spark
+      # bitnami=1001, airflow=root). DADOS trafegam via s3a://, NUNCA por caminho
+      # local: executores em node-2/node-3 nao enxergam o disco do node-1.
+      - /data/shared:/opt/shared
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 4G
+
+  # ---------------------------------------------------------------------------
+  # DAG processor - parseia os DAGs (obrigatorio/separado no Airflow 3).
+  # ---------------------------------------------------------------------------
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    environment:
+      <<: *airflow-common-env
+    volumes:
+      - /opt/datastack/config/airflow/webserver_config.py:/opt/airflow/webserver_config.py:ro
+      - airflow-logs:/opt/airflow/logs
+      - /opt/datastack/dags:/opt/airflow/dags
+      # Pasta compartilhada (ro aqui): permite DAGs referenciarem/lerem artefatos
+      # de codigo em /opt/shared durante o parse, se precisarem.
+      - /data/shared:/opt/shared:ro
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # Triggerer - executa deferrable operators (leve).
+  # ---------------------------------------------------------------------------
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    environment:
+      <<: *airflow-common-env
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 1G
+
+volumes:
+  airflow-logs:
+    driver: local
+
+networks:
+  datastack-net:
+    external: true

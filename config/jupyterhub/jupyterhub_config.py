@@ -74,9 +74,16 @@ c.DockerSpawner.environment = {
     "AWS_ENDPOINT_URL": "http://seaweedfs-filer-1:8333",
 }
 
-# Volume persistente por usuario
+# Volume persistente por usuario + pasta compartilhada de CODIGO (nao dados)
+# entre Jupyter (/home/jovyan/shared), spark-master (/opt/shared) e Airflow
+# (/opt/shared): mesmo /data/shared do host (sticky 1777, uids diferentes
+# escrevem). DADOS sempre via s3a:// - executores em node-2/node-3 nao veem
+# o disco do node-1. Bind mount so pega em NOVOS spawns; um container de
+# notebook ja aberto antes desta mudanca nao ganha o mount (precisa parar e
+# reabrir o servidor pelo Hub).
 c.DockerSpawner.volumes = {
     "jupyterhub-user-{username}": "/home/jovyan/work",
+    "/data/shared": "/home/jovyan/shared",
 }
 
 c.DockerSpawner.cpu_limit = 8

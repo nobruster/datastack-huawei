@@ -5,10 +5,16 @@
   "loginTheme": "keycloak",
   "roles": {
     "realm": [
-      {"name": "user"},
+      {
+        "name": "user"
+      },
       {
         "name": "superset_admin",
         "description": "Mapeada para o role Admin do Superset via AUTH_ROLES_MAPPING (superset_config.py)"
+      },
+      {
+        "name": "airflow_admin",
+        "description": "Mapeada para o role Admin do Airflow via AUTH_ROLES_MAPPING (config/airflow/webserver_config.py)"
       }
     ]
   },
@@ -132,6 +138,42 @@
       ]
     },
     {
+      "clientId": "airflow",
+      "name": "Apache Airflow",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "secret": "airflow-oidc-secret-CHANGE-ME",
+      "redirectUris": [
+        "https://airflow.<eip>.sslip.io/auth/oauth-authorized/keycloak"
+      ],
+      "webOrigins": [
+        "https://airflow.<eip>.sslip.io"
+      ],
+      "defaultClientScopes": [
+        "openid",
+        "email",
+        "profile"
+      ],
+      "protocolMappers": [
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
       "clientId": "portainer",
       "name": "Portainer",
       "enabled": true,
@@ -171,7 +213,8 @@
       ],
       "realmRoles": [
         "user",
-        "superset_admin"
+        "superset_admin",
+        "airflow_admin"
       ]
     },
     {
@@ -190,7 +233,8 @@
       ],
       "realmRoles": [
         "user",
-        "superset_admin"
+        "superset_admin",
+        "airflow_admin"
       ]
     }
   ]

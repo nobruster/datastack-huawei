@@ -589,3 +589,37 @@ passwords from `stacks/11-ingress.yml` — all of which are public in this repo.
 **only** on the nodes, never in git. Rotating the SSO secrets means: new secret on the Keycloak client +
 matching `--client-secret` (service update or a real secrets mechanism), new random 32-byte cookie secret.
 The Security Group (single allowed source IP) is currently the only thing making this tolerable.
+
+## Airflow 3.0.6 orchestrates the Spark jobs — `stacks/12-airflow.yml`
+
+Airflow 3.0.6 (custom local image `datastack/airflow:3.0-oidc`, `config/airflow/Dockerfile`) runs as the
+`airflow` stack: `airflow-apiserver`, `airflow-scheduler` (LocalExecutor — tasks run here),
+`airflow-dag-processor` (mandatory separate component in Airflow 3), `airflow-triggerer`. All pinned to
+node-1, no host ports — UI only via `https://airflow.<eip>.sslip.io` (Traefik router `airflow`).
+Metadata DB is the `airflow` database in the containerized Postgres. One-off init (already run; needed
+again only on a fresh DB): `airflow db migrate` + `airflow fab-db migrate` via `docker run --rm`.
+
+- **SSO**: FAB auth manager (`AIRFLOW__CORE__AUTH_MANAGER=...FabAuthManager`) + `AUTH_OAUTH` in
+  `config/airflow/webserver_config.py`, same hairpin split as Superset. Two Airflow-3 quirks, both hit:
+  the OAuth callback is prefixed with `/auth/` (`/auth/oauth-authorized/keycloak` — the Keycloak client
+  `airflow` lists exactly that), and `[fab] session_backend` must be `securecookie` — the `database`
+  backend 500s because neither `db migrate` nor `fab-db migrate` creates the `session` table in Airflow 3.
+  Realm role `airflow_admin` → Airflow `Admin` via `AUTH_ROLES_MAPPING`; new users register as `Viewer`.
+- **How DAGs submit Spark jobs** (`dags/medallion_beneficios.py`, mounted from `/opt/datastack/dags`):
+  the scheduler runs as root with `/var/run/docker.sock` + docker CLI and does
+  `docker exec -u 0 <spark-master-cid> ... bin/spark-submit --master spark://spark-master:7077
+  /opt/datastack/jobs/<job>.py` — same proven pattern as `scripts/run-spark-job.sh` (UGI `-u 0` trap,
+  `HOME=/root`, `spark.jars.ivy`), minus the `docker cp`: spark-master now bind-mounts
+  `/opt/datastack/jobs` read-only, so jobs are referenced by path. Delta jobs (bronze/silver/gold) still
+  need `--packages io.delta:delta-spark_2.12:3.2.0`; landing doesn't. The DAG is `schedule=None`
+  (manual trigger) — set a cron there when the pipeline should run unattended. Validated 2026-07-03 by
+  really running bronze → silver → gold via `airflow tasks test` (landing skipped: identical mechanism,
+  would just re-download the 11GB ZIP).
+- **Shared code folder `/data/shared`** (host node-1, sticky `1777` because uids differ): mounted as
+  `/opt/shared` in spark-master and airflow-scheduler (rw; ro in dag-processor) and `/home/jovyan/shared`
+  in Jupyter notebook containers (DockerSpawner volume). It is for CODE (.py jobs, notebooks), never data
+  — node-2/3 executors can't see node-1's disk; data always goes through `s3a://`. Survives everything
+  (bind mount on the fstab-mounted `/dev/vdb` data disk; `01-base-setup.sh` recreates it on a VM rebuild).
+  Gotcha: an **already-running notebook container doesn't gain a newly added mount** — DockerSpawner
+  volumes apply on the next spawn, and the hub itself only re-reads `jupyterhub_config.py` on restart
+  (`docker service update --force apps_jupyterhub`; config-only changes don't alter the Swarm spec).

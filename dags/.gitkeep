@@ -1,0 +1,3 @@
+# Diretorio de DAGs do Airflow (montado em /opt/airflow/dags no scheduler e
+# dag-processor via /opt/datastack/dags). Os DAGs dos jobs Spark serao criados
+# por outro agente. Mantido no git com este .gitkeep.

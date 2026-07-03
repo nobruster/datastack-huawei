@@ -133,6 +133,16 @@ http:
       service: superset
       tls: {}
 
+    # --- Airflow (auth OIDC NATIVA via FAB auth manager do Airflow 3, sem
+    #     oauth2-proxy). Traefik so termina TLS e encaminha; o Airflow faz o
+    #     fluxo OAuth2 com o Keycloak (precisa de X-Forwarded-Proto=https ->
+    #     [fab] enable_proxy_fix=True). Aponta pro apiserver (UI + API). ---
+    airflow:
+      rule: "Host(`airflow.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: airflow
+      tls: {}
+
     # --- Portainer (auth OIDC NATIVA do proprio Portainer, CE - sem
     #     oauth2-proxy na frente; login duplo seria ruim). Traefik so termina
     #     TLS e encaminha; o Portainer faz o fluxo OAuth2 com o Keycloak. ---
@@ -203,3 +213,7 @@ http:
       loadBalancer:
         servers:
           - url: "http://portainer:9000"
+    airflow:
+      loadBalancer:
+        servers:
+          - url: "http://airflow-apiserver:8080"
