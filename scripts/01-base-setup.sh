@@ -55,6 +55,11 @@ fi
 # Cria diretorios de dados
 mkdir -p /data/seaweedfs/master /data/seaweedfs/volume /data/seaweedfs/filer
 mkdir -p /data/postgres /data/jupyter /data/spark /data/trino
+# ZooKeeper ensemble (stacks/13-zookeeper.yml): backend do Spark Master HA
+# (recoveryMode=ZOOKEEPER). data/datalog em bind-mount, um ZK por no. O
+# entrypoint da imagem oficial roda como root e faz chown para o usuario
+# zookeeper (uid 1000) nestes dirs, entao basta cria-los aqui.
+mkdir -p /data/zookeeper/data /data/zookeeper/datalog
 # Pasta compartilhada de CODIGO (nao dados) entre Jupyter/Spark-master/Airflow
 # (node-1 only). Sticky bit (1777) porque uids diferentes escrevem nela
 # (jovyan=1000, bitnami spark=1001, airflow scheduler=root).

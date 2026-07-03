@@ -187,12 +187,62 @@ real deployment, change all occurrences together via `grep -rl CHANGE_ME`.
 
 ## High-availability scope
 
-The Swarm control plane (3 managers) is HA by design. Individual services are **not**: PostgreSQL, Spark
-Master, Trino Coordinator, Hive Metastore, and Redis are all pinned to node-1 via placement constraints
-with no standby/replica. If node-1 goes down, those services stay down until it returns — this is the
+The Swarm control plane (3 managers) is HA by design. **Spark Master is now HA too** (2026-07-04): 3
+instances (`spark-master-1/2/3`, one per node) with `recoveryMode=ZOOKEEPER` against the `zookeeper` stack
+(`zk-1/2/3`), failover tested at ~40s (kill the leader container, a standby is elected and workers/clients
+recover). See "Spark Master HA via ZooKeeper" below for the wiring.
+
+Everything else is **not** HA: PostgreSQL, Trino Coordinator, Hive Metastore, and Redis are all pinned to
+node-1 via placement constraints with no standby/replica — and node-1 remains a SPOF for the *rest* of the
+platform even after the Spark Master fix: Traefik (single ingress, 80/443), Keycloak (the only IdP), and
+Airflow (scheduler/dag-processor/triggerer, all pinned to node-1) live there too, plus any Spark driver
+running in **client mode** via `docker exec` into a master container (the driver itself isn't HA — only
+which master it talks to is). If node-1 goes down, those services stay down until it returns — this is the
 current architecture, not a bug to silently "fix" by removing constraints (removing them would break the
 bind-mount assumption above). A full Postgres cluster (streaming replication + failover) was evaluated and
 explicitly deferred as a separate, larger project — don't add it unprompted.
+
+## Spark Master HA via ZooKeeper (`stacks/13-zookeeper.yml`)
+
+The single-instance `spark-master` service is gone — replaced by `spark-master-1/2/3` (one per node,
+`06-datastack.yml`) with Spark Standalone's built-in `recoveryMode=ZOOKEEPER`, backed by a dedicated
+3-node ensemble (`zookeeper` stack, `zk-1/2/3`, one per node). Points worth knowing before touching either:
+
+- **The ZK stack needs `endpoint_mode: dnsrr`, same root cause as the SeaweedFS masters.** Each ZK node
+  binds its quorum/election ports (2888/3888) on the address its *own* `server.N=zk-N:...` entry resolves
+  to — the official `zookeeper:3.9` image's entrypoint does not rewrite that entry to `0.0.0.0`. Under the
+  default `vip` endpoint mode, `zk-N` resolves to the service VIP, and `bind()` to a VIP fails (`cannot
+  assign requested address`). `dnsrr` makes it resolve to the task's real IP instead. No ports are
+  published, so there's no ingress conflict to worry about (unlike SeaweedFS, which also had to solve
+  `mode: host` + `-ip.bind=0.0.0.0` for its published ports — not needed here).
+- **`SPARK_MASTER_OPTS` (a JVM `-D` flags env var), not `spark-defaults.conf`, carries the ZK config**
+  (`-Dspark.deploy.recoveryMode=ZOOKEEPER -Dspark.deploy.zookeeper.url=zk-1:2181,zk-2:2181,zk-3:2181
+  -Dspark.deploy.zookeeper.dir=/spark-ha`). Reason: the bitnami image launches the master daemon via
+  Spark's `SparkClassCommandBuilder`, which reads `SPARK_MASTER_OPTS` and appends it to the JVM command
+  line for the `Master` class specifically — `spark-defaults.conf` is read by the `SparkSubmit` launcher
+  for *applications* (drivers), not by the master/worker daemons themselves. Putting recovery config in
+  `spark-defaults.conf` would silently do nothing for the masters.
+- **Only `spark-master-1` mounts `/opt/datastack/jobs` (ro) and `/data/shared`** — those bind-mount sources
+  only exist on node-1's filesystem. This is deliberate: node-1 is the one submission node (Airflow's
+  scheduler and `scripts/run-spark-job.sh` both `docker exec` into whichever spark-master container is
+  local to node-1, which is always `spark-master-1` given the placement constraint) — it does **not** need
+  to be the ZK/Spark leader for job submission to work, since `spark-submit`'s `--master`/`spark.master`
+  handles leader discovery itself once given all three URLs.
+- **Every client must use the multi-master URL**, never a single name: `spark://spark-master-1:7077,
+  spark-master-2:7077,spark-master-3:7077`. Spark Standalone's HA client logic tries each host in order and
+  follows redirects to whichever is the current leader; pointing at just one master defeats the purpose
+  (that master could be a standby, or — since the old singular `spark-master` service was deleted outright
+  — simply fail to resolve). Updated in `config/spark/spark-defaults.conf`, `scripts/run-spark-job.sh`,
+  `dags/medallion_beneficios.py`, `config/jupyterhub/jupyterhub_config.py` (`SPARK_MASTER` env for notebook
+  drivers), `notebooks/faker-landing.ipynb`, and the job docstrings in `jobs/`.
+- **In-flight jobs survive a master failover.** Once a Spark application's executors are registered, they
+  keep running and reporting to the driver independently of the master; the master is only needed for
+  initial registration/resource negotiation. Validated: triggering `spark-master-1` down mid-job did not
+  kill the running executors.
+- **Traefik's `spark` router** (`config/traefik/dynamic/dynamic.yml`) load-balances across all three UIs
+  (`http://spark-master-1:8090`, `-2`, `-3`) rather than pointing at one — see the comment in that file for
+  why a standby-aware healthcheck isn't possible (Traefik's healthcheck is just HTTP 200, and a standby
+  master answers 200 too, serving its own "Status: STANDBY" page with a pointer to the current leader).
 
 ## Trino: new `delta` catalog to query the medallion Delta tables; `hive` catalog had blank S3 creds
 
@@ -333,8 +383,10 @@ Traefik got a new router (`config/traefik/dynamic/dynamic.yml`, `superset` → `
 ## PySpark client from JupyterHub notebooks — version-matching traps (all hit in sequence)
 
 `notebooks/faker-landing.ipynb` is the working reference (Faker → `s3a://landing/faker-demo/pessoas/`).
-A notebook driver connecting to `spark://spark-master:7077` must match the cluster on TWO axes, and the
-DockerSpawner image (`jupyter/pyspark-notebook:spark-3.5.0`) matches neither out of the box:
+A notebook driver connecting to `spark://spark-master-1:7077,spark-master-2:7077,spark-master-3:7077`
+(multi-master HA URL — see "Spark Master HA via ZooKeeper" below; the old single-name `spark-master`
+service no longer exists) must match the cluster on TWO axes, and the DockerSpawner image
+(`jupyter/pyspark-notebook:spark-3.5.0`) matches neither out of the box:
 
 1. **Exact Spark version (3.5.6, not just "3.5.x").** The image ships Spark/PySpark 3.5.0; the cluster runs
    3.5.6. Java task serialization is strict about `serialVersionUID` of scheduler classes → any patch-level
@@ -443,9 +495,16 @@ did not match `seaweedfs.<eip>...`); list the explicit callback URL per service.
 It carries all three realm roles (`user`, `superset_admin`, `airflow_admin`), which the per-tool
 `AUTH_ROLES_MAPPING` (Superset, Airflow) turns into that tool's own `Admin` role at login, and it's also
 listed in JupyterHub's `admin_users` (hub-admin, not a role-mapping — GenericOAuthenticator has no realm-role
-concept). Portainer's OAuth (separate effort) resolves the same way via `preferred_username`. Its password is
+concept). Portainer's OAuth resolves the same way via `preferred_username` — active and validated end-to-end
+(2026-07-04, authorization-code flow via curl); ports 9000/9443 are closed, and the OAuth settings live in
+Portainer's DB (`portainer-data` volume, applied via `PUT /api/settings`), **not** in any stack file — a
+volume wipe loses them. **Portainer CE gotcha: with OAuth enabled, only the INITIAL admin (`admin`) can
+still log in with an internal password**; internal users created later (e.g. the internal `superadmin`) get
+`422 "Only initial admin is allowed to login without oauth"` and must use OAuth — the initial `admin` is the
+anti-lockout fallback if Keycloak is down. The `superadmin` password is
 **not versioned anywhere** (real value only lives in the running Keycloak, deliberately, unlike the
-`_CHANGE_ME` placeholders elsewhere in this repo). Exceptions to "one identity everywhere": (1) **Swarmpit**
+`_CHANGE_ME` placeholders elsewhere in this repo; on node-1 it also exists at
+`/root/.credentials/portainer-superadmin`, outside git, used for the Portainer API). Exceptions to "one identity everywhere": (1) **Swarmpit**
 keeps its own internal CouchDB-backed login on top of the SSO forward-auth gate — a real double login, no
 role/claim from Keycloak reaches it, and there is currently no safe way to provision a matching `superadmin`
 account there (its single seeded `admin` user's password is unknown, and the app's own login API doesn't
@@ -625,12 +684,13 @@ again only on a fresh DB): `airflow db migrate` + `airflow fab-db migrate` via `
   Realm role `airflow_admin` → Airflow `Admin` via `AUTH_ROLES_MAPPING`; new users register as `Viewer`.
 - **How DAGs submit Spark jobs** (`dags/medallion_beneficios.py`, mounted from `/opt/datastack/dags`):
   the scheduler runs as root with `/var/run/docker.sock` + docker CLI and does
-  `docker exec -u 0 <spark-master-cid> ... bin/spark-submit --master spark://spark-master:7077
-  /opt/datastack/jobs/<job>.py` — same proven pattern as `scripts/run-spark-job.sh` (UGI `-u 0` trap,
-  `HOME=/root`, `spark.jars.ivy`), minus the `docker cp`: spark-master now bind-mounts
-  `/opt/datastack/jobs` read-only, so jobs are referenced by path. Delta jobs (bronze/silver/gold) still
-  need `--packages io.delta:delta-spark_2.12:3.2.0`; landing doesn't. The DAG is `schedule=None`
-  (manual trigger) — set a cron there when the pipeline should run unattended. Validated 2026-07-03 by
+  `docker exec -u 0 <spark-master-1-cid> ... bin/spark-submit --master
+  spark://spark-master-1:7077,spark-master-2:7077,spark-master-3:7077 /opt/datastack/jobs/<job>.py` — same
+  proven pattern as `scripts/run-spark-job.sh` (UGI `-u 0` trap, `HOME=/root`, `spark.jars.ivy`), minus the
+  `docker cp`: spark-master-1 now bind-mounts `/opt/datastack/jobs` read-only, so jobs are referenced by
+  path. Delta jobs (bronze/silver/gold) still need `--packages io.delta:delta-spark_2.12:3.2.0`; landing
+  doesn't. The DAG is `schedule=None` (manual trigger) — set a cron there when the pipeline should run
+  unattended. Validated 2026-07-03 by
   really running bronze → silver → gold via `airflow tasks test` (landing skipped: identical mechanism,
   would just re-download the 11GB ZIP).
 - **Shared code folder `/data/shared`** (host node-1, sticky `1777` because uids differ): mounted as

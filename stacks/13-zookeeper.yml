@@ -1,0 +1,118 @@
+version: "3.8"
+
+# =============================================================================
+# ZooKeeper ensemble (3 nos) - backend de recovery para o Spark Standalone HA
+# (spark.deploy.recoveryMode=ZOOKEEPER em stacks/06-datastack.yml).
+#
+# ORDEM DE DEPLOY: apesar do numero 13, esta stack precisa subir ANTES do
+# redeploy de 06-datastack.yml - os spark-masters usam o ensemble para eleicao
+# de lider. (Na pratica os masters RETRYAM a conexao ao ZK, entao uma inversao
+# momentanea nao e fatal, mas suba o ZK primeiro e valide o ensemble.)
+#
+# Um ZK por no (placement por node.labels.name), imagem oficial zookeeper:3.9.
+# Sem portas publicadas no host: 2181 (cliente), 2888 (quorum), 3888 (eleicao)
+# so no overlay datastack-net.
+#
+# endpoint_mode: dnsrr (OBRIGATORIO) - cada ZK binda a porta de eleicao (3888)
+# no endereco resolvido da PROPRIA entrada server.N=zk-N:... . O entrypoint da
+# imagem oficial NAO reescreve a entrada propria para 0.0.0.0, entao sob o
+# endpoint_mode padrao (vip) o nome zk-N resolve para a VIP do servico e o
+# bind() literal falha ("cannot assign requested address"). Mesma licao dos
+# masters do SeaweedFS: dnsrr faz zk-N resolver o IP real da task, que e
+# bindavel. Sem porta publicada, dnsrr nao tem conflito com ingress.
+#
+# Imagem precisa estar nos 3 nos (node-2/node-3 sem egress):
+#   docker save zookeeper:3.9 | ssh root@<ip> docker load
+# Dados/log em bind /data/zookeeper/{data,datalog} (criados nos 3 nos por
+# scripts/01-base-setup.sh; o entrypoint roda como root e faz chown para o
+# usuario zookeeper nos dirs montados).
+# =============================================================================
+
+x-zk-common: &zk-common
+  image: zookeeper:3.9
+  networks:
+    - datastack-net
+  environment: &zk-env
+    # Formato da imagem oficial: "server.N=<host>:<quorum>:<eleicao>;<cliente>".
+    ZOO_SERVERS: server.1=zk-1:2888:3888;2181 server.2=zk-2:2888:3888;2181 server.3=zk-3:2888:3888;2181
+    ZOO_STANDALONE_ENABLED: "false"
+    # Libera os four-letter words usados na validacao (echo srvr | nc zk-N 2181).
+    ZOO_4LW_COMMANDS_WHITELIST: "srvr,stat,mntr,ruok,conf,isro,dirs"
+    # Heap dentro do limite de memoria (~1G) do servico.
+    JVMFLAGS: "-Xms256m -Xmx768m"
+
+services:
+
+  zk-1:
+    <<: *zk-common
+    environment:
+      <<: *zk-env
+      ZOO_MY_ID: "1"
+    volumes:
+      - /data/zookeeper/data:/data
+      - /data/zookeeper/datalog:/datalog
+    deploy:
+      endpoint_mode: dnsrr
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-1
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  zk-2:
+    <<: *zk-common
+    environment:
+      <<: *zk-env
+      ZOO_MY_ID: "2"
+    volumes:
+      - /data/zookeeper/data:/data
+      - /data/zookeeper/datalog:/datalog
+    deploy:
+      endpoint_mode: dnsrr
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-2
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  zk-3:
+    <<: *zk-common
+    environment:
+      <<: *zk-env
+      ZOO_MY_ID: "3"
+    volumes:
+      - /data/zookeeper/data:/data
+      - /data/zookeeper/datalog:/datalog
+    deploy:
+      endpoint_mode: dnsrr
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-3
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+networks:
+  datastack-net:
+    external: true
+    name: datastack-net

@@ -38,7 +38,7 @@ Como executar (no node-1):
   docker cp jobs/landing-beneficios-v3.py "$CID:/tmp/landing-v3.py"
   docker exec -u 0 "$CID" sh -c 'export HOME=/root && cd /opt/bitnami/spark && \
     bin/spark-submit --conf spark.jars.ivy=/root/.ivy2 \
-    --master spark://spark-master:7077 /tmp/landing-v3.py'
+    --master spark://spark-master-1:7077,spark-master-2:7077,spark-master-3:7077 /tmp/landing-v3.py'
 """
 import io
 import os

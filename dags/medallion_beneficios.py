@@ -65,7 +65,7 @@ fi
 echo ">> spark-master container: $CID"
 docker exec -u 0 "$CID" sh -c "export HOME=/root && cd /opt/bitnami/spark && \\
   bin/spark-submit --conf spark.jars.ivy=/root/.ivy2 {pkg_arg}\\
-  --master spark://spark-master:7077 {JOBS_DIR}/{job_file}"
+  --master spark://spark-master-1:7077,spark-master-2:7077,spark-master-3:7077 {JOBS_DIR}/{job_file}"
 """
 
 

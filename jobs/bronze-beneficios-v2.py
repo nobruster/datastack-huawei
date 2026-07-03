@@ -34,7 +34,7 @@ Como executar (no node-1):
   docker exec -u 0 "$CID" sh -c 'export HOME=/root && cd /opt/bitnami/spark && \
     bin/spark-submit --conf spark.jars.ivy=/root/.ivy2 \
     --packages io.delta:delta-spark_2.12:3.2.0 \
-    --master spark://spark-master:7077 /tmp/bronze-v2.py'
+    --master spark://spark-master-1:7077,spark-master-2:7077,spark-master-3:7077 /tmp/bronze-v2.py'
 """
 
 import time

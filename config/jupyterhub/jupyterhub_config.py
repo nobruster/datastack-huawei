@@ -68,7 +68,12 @@ c.DockerSpawner.network_name = "datastack-net"
 c.DockerSpawner.use_internal_ip = True
 
 c.DockerSpawner.environment = {
-    "SPARK_MASTER": "spark://spark-master:7077",
+    # HA via ZooKeeper (3 masters, um lider por vez) - o servico antigo
+    # "spark-master" nao existe mais; listar os TRES aqui (Spark Standalone
+    # HA faz failover no cliente). Nota: containers de notebook ja abertos
+    # nao pegam essa mudanca - so `docker service update --force
+    # apps_jupyterhub` + um novo spawn.
+    "SPARK_MASTER": "spark://spark-master-1:7077,spark-master-2:7077,spark-master-3:7077",
     "SPARK_HOME": "/usr/local/spark",
     "HADOOP_CONF_DIR": "/opt/hadoop/conf",
     "AWS_ENDPOINT_URL": "http://seaweedfs-filer-1:8333",

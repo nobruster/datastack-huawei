@@ -14,9 +14,9 @@ Stack de processamento de dados rodando em **Docker Swarm** na **Huawei Cloud HC
 
 | Nó | IP Privado | EIP | Papel |
 |---|---|---|---|
-| node-1 | <ip-node-1> | <eip> | Swarm manager (leader), PostgreSQL, Hive Metastore, Spark Master, Spark History Server, Trino Coordinator, Redis, JupyterHub, Superset, Portainer, Swarmpit, Airflow, Traefik, Keycloak |
-| node-2 | <ip-node-2> | - | Swarm manager, Spark Worker, Trino Worker, SeaweedFS (master+volume+filer) |
-| node-3 | <ip-node-3> | - | Swarm manager, Spark Worker, Trino Worker, SeaweedFS (master+volume+filer) |
+| node-1 | <ip-node-1> | <eip> | Swarm manager (leader), PostgreSQL, Hive Metastore, Spark Master-1 (HA/ZK), Spark History Server, Trino Coordinator, Redis, JupyterHub, Superset, Portainer, Swarmpit, Airflow, Traefik, Keycloak, ZooKeeper (zk-1) |
+| node-2 | <ip-node-2> | - | Swarm manager, Spark Master-2 (HA/ZK), Spark Worker, Trino Worker, SeaweedFS (master+volume+filer), ZooKeeper (zk-2) |
+| node-3 | <ip-node-3> | - | Swarm manager, Spark Master-3 (HA/ZK), Spark Worker, Trino Worker, SeaweedFS (master+volume+filer), ZooKeeper (zk-3) |
 
 ## Componentes da Stack e Portas
 
@@ -30,8 +30,9 @@ publicados no host e protegidos pelo Security Group.
 |---|---|---|---|---|---|
 | PostgreSQL | 15 | 5432 (interno) | — | node-1 | datastack |
 | Hive Metastore | 3.1.3 | 9083 (host, SG) | — | node-1 | datastack |
-| Apache Spark Master | 3.5 | 8090 (UI, interno), 7077 (RPC, host) | `spark.<eip>.sslip.io` | node-1 | datastack |
+| Apache Spark Master (HA, 3x) | 3.5 | 8090 (UI, interno), 7077 (RPC, interno) | `spark.<eip>.sslip.io` (LB nos 3) | node-1, node-2, node-3 | datastack |
 | Apache Spark Worker | 3.5 | 8091/8092 (interno) | — (fechado, baixo valor) | node-2, node-3 | datastack |
+| ZooKeeper (ensemble, 3x) | 3.9 | 2181/2888/3888 (interno) | — | node-1, node-2, node-3 | zookeeper |
 | Spark History Server | 3.5 | 18081 (interno) | `spark-history.<eip>.sslip.io` | node-1 | datastack |
 | Trino Coordinator | 435 | 8080 (interno) | `trino.<eip>.sslip.io` (OAuth2 nativo) | node-1 | datastack |
 | Trino Worker | 435 | 8080 (interno) | — | node-2, node-3 | datastack |
@@ -42,7 +43,7 @@ publicados no host e protegidos pelo Security Group.
 | Redis | 7 | 6379 (interno) | — | node-1 | apps |
 | JupyterHub | 4.1 | 8000 (interno) | `jupyter.<eip>.sslip.io` (OIDC nativo) | node-1 | apps |
 | Apache Superset | 3.1.3-oidc | 8088 (interno) | `superset.<eip>.sslip.io` (OIDC nativo) | node-1 | apps |
-| Portainer | 2.20.3 | 9000/9443 (host) † | `portainer.<eip>.sslip.io` (OIDC nativo) | node-1 | apps |
+| Portainer | 2.20.3 | 9000 (interno) † | `portainer.<eip>.sslip.io` (OIDC nativo) | node-1 | apps |
 | Portainer Agent | 2.20.3 | 9001 (host) | — | todos | apps |
 | Swarmpit App | 1.10 | 8080 (interno) | `swarmpit.<eip>.sslip.io` ‡ | node-1 | swarmpit |
 | Swarmpit Agent | latest | - | — | todos | swarmpit |
@@ -53,10 +54,13 @@ publicados no host e protegidos pelo Security Group.
 | Keycloak (IdP/SSO) | 25.0 | 8080 (interno) | `keycloak.<eip>.sslip.io` | node-1 | ingress |
 | oauth2-proxy (`sso-auth`, forward-auth único) | v7.6.0 | 4180 (interno) | — (middleware do Traefik) | node-1 | ingress |
 
-`<eip>` = `<eip>`. † Portainer ainda publica 9000/9443 no host **até o login OAuth ser confirmado**
-na UI (a config está pronta; ver "Ingress único + SSO"). ‡ Swarmpit tem o gate SSO do Traefik **mais** o
-login interno próprio (login duplo — limitação da ferramenta). Portas ainda publicadas no host (7077 RPC
-Spark, 9083 Hive Thrift, 8081/18080 e 8333/19333 SeaweedFS, 9001 Portainer Agent) são protocolos de fio /
+`<eip>` = `<eip>`. † Portainer: OAuth OIDC via Keycloak ativo e validado; 9000/9443 fechadas —
+acesso só via Traefik. ‡ Swarmpit tem o gate SSO do Traefik **mais** o
+login interno próprio (login duplo — limitação da ferramenta). Spark RPC (7077) não é mais publicado no
+host desde a HA via ZooKeeper (3 masters de mesma porta exigiriam `mode: host`; acesso RPC agora é sempre
+por nome de serviço no overlay) — não há client externo direto no protocolo Spark RPC, só via container.
+Portas ainda publicadas no host (9083 Hive Thrift, 8081/18080 e 8333/19333 SeaweedFS, 9001 Portainer Agent)
+são protocolos de fio /
 S3, sem UI de navegador — proteção é rede overlay + Security Group.
 
 ## Ingress único + SSO (Traefik + Keycloak)
@@ -110,7 +114,7 @@ manipulam código:
 | Ferramenta | Ponto de montagem |
 |---|---|
 | Jupyter (notebooks) | `/home/jovyan/shared` |
-| Spark Master | `/opt/shared` |
+| Spark Master-1 (node-1 — único dos 3 masters com esse mount; é o nó de submissão) | `/opt/shared` |
 | Airflow (scheduler) | `/opt/shared` |
 
 É o mesmo diretório `/data/shared` no host node-1 (sticky `1777`, porque os UIDs diferem entre as
@@ -140,7 +144,8 @@ datastack-huawei/
 │   ├── 08-apps-stack.yml         # Redis + JupyterHub + Superset + Portainer
 │   ├── 10-swarmpit-stack.yml     # Swarmpit (gerenciamento do Swarm)
 │   ├── 11-ingress.yml            # Traefik (ingress/TLS) + Keycloak (SSO) + oauth2-proxy (forward-auth)
-│   └── 12-airflow.yml            # Apache Airflow 3.0 (api-server + scheduler + dag-processor + triggerer)
+│   ├── 12-airflow.yml            # Apache Airflow 3.0 (api-server + scheduler + dag-processor + triggerer)
+│   └── 13-zookeeper.yml          # Ensemble ZooKeeper (3x) - recovery backend do Spark Master HA
 ├── jobs/                         # Pipeline medallion (PySpark), landing -> bronze -> silver -> gold
 │   ├── landing-beneficios-v3.py  # Ingestao raw (staging s3a:// + magic committer)
 │   ├── bronze-beneficios-v2.py   # Tipagem/Delta Lake sobre a landing
@@ -249,10 +254,15 @@ bash scripts/07-sync-config.sh
 bash scripts/09-deploy-all.sh
 ```
 
-O `09-deploy-all.sh` faz deploy das stacks `05/06/08/10`. As stacks `11-ingress` (Traefik+Keycloak+SSO) e
-`12-airflow` (Airflow) são deployadas à parte:
+O `09-deploy-all.sh` faz deploy das stacks `05/06/08/10`. As stacks `11-ingress` (Traefik+Keycloak+SSO),
+`12-airflow` (Airflow) e `13-zookeeper` (ensemble ZooKeeper, recovery backend do Spark Master HA) são
+deployadas à parte. **`zookeeper` precisa subir antes de `06-datastack.yml`** (os `spark-master-1/2/3` usam
+o ensemble para eleição de líder via `recoveryMode=ZOOKEEPER`) — na prática os masters retentam a conexão
+ao ZK, então uma inversão momentânea não é fatal, mas suba o ZK primeiro e valide o ensemble antes de
+(re)deployar o datastack:
 
 ```bash
+docker stack deploy -c /opt/datastack/stacks/13-zookeeper.yml zookeeper
 docker stack deploy -c /opt/datastack/stacks/11-ingress.yml ingress
 docker stack deploy -c /opt/datastack/stacks/12-airflow.yml airflow
 ```
@@ -416,7 +426,21 @@ Secure trafega normalmente. A porta 23646 não é mais publicada no host.
 ## Alta disponibilidade
 
 - **Cluster Swarm:** 3 managers em Raft — tolera a queda de 1 nó sem perder o quorum (`docker node ls` continua respondendo, novos serviços podem ser agendados nos nós restantes).
-- **Serviços fixos por nó:** PostgreSQL, Hive Metastore, Spark Master, Trino Coordinator e Redis são pinados no node-1 via placement constraint — se o node-1 cair, esses serviços especificos ficam indisponíveis até o node-1 voltar (não há standby/replica configurada). Isso é uma limitação de arquitetura atual, não um bug — um Postgres em cluster (replicação + failover) foi avaliado e propositalmente adiado como projeto separado.
+- **Spark Master agora É HA (2026-07-04):** 3 instâncias (`spark-master-1/2/3`, uma por nó) com
+  `recoveryMode=ZOOKEEPER` (`spark.deploy.recoveryMode`) contra um ensemble ZooKeeper dedicado de 3 nós
+  (`stacks/13-zookeeper.yml`, `zk-1/2/3`, um por nó). Failover testado (~40s: derruba o container líder,
+  um standby assume, workers e clientes reconectam sozinhos) — jobs em execução sobrevivem (executores já
+  registrados continuam rodando, independente do master). Todo cliente Spark (drivers, notebooks, Airflow,
+  scripts) usa a URL multi-master `spark://spark-master-1:7077,spark-master-2:7077,spark-master-3:7077`; o
+  serviço antigo singular `spark-master` **não existe mais**. Detalhes completos (por que ZK precisa de
+  `endpoint_mode: dnsrr`, por que a config fica em `SPARK_MASTER_OPTS` e não em `spark-defaults.conf`, etc)
+  em CLAUDE.md ("Spark Master HA via ZooKeeper").
+- **Serviços ainda fixos por nó (sem HA):** PostgreSQL, Hive Metastore, Trino Coordinator e Redis seguem
+  pinados no node-1 via placement constraint — se o node-1 cair, esses serviços específicos ficam
+  indisponíveis até o node-1 voltar (não há standby/replica configurada). node-1 também segue sendo ponto
+  único para Traefik (ingress único), Keycloak (único IdP) e Airflow (scheduler/dag-processor/triggerer).
+  Isso é uma limitação de arquitetura atual, não um bug — um Postgres em cluster (replicação + failover) foi
+  avaliado e propositalmente adiado como projeto separado.
 
 ## Servicos apos deploy
 
@@ -432,7 +456,7 @@ ver "Identidade única"). As antigas URLs por IP:porta cru **não existem mais**
 | Superset | https://superset.<eip>.sslip.io | OIDC nativo |
 | Airflow | https://airflow.<eip>.sslip.io | OIDC nativo |
 | Portainer | https://portainer.<eip>.sslip.io | OIDC nativo † |
-| Spark Master UI | https://spark.<eip>.sslip.io | SSO (forward-auth) |
+| Spark Master UI (HA, LB nos 3 masters — ver "Alta disponibilidade") | https://spark.<eip>.sslip.io | SSO (forward-auth) |
 | Spark History Server | https://spark-history.<eip>.sslip.io | SSO (forward-auth) |
 | SeaweedFS Admin (dashboard) | https://seaweedfs.<eip>.sslip.io | SSO (forward-auth) |
 | SeaweedFS Filer UI | https://seaweedfs-filer.<eip>.sslip.io | SSO (forward-auth) |
@@ -441,8 +465,9 @@ ver "Identidade única"). As antigas URLs por IP:porta cru **não existem mais**
 | Traefik Dashboard (read-only) | https://traefik.<eip>.sslip.io/dashboard/ | SSO (forward-auth) |
 | S3 API (não-navegador; assinatura S3) | http://<ip-node-1>:8333 | chave/segredo S3 |
 
-† Portainer: o login OIDC está configurado mas o passo final (ativar OAuth na UI) depende da senha do admin
-interno — ver "Pendências". ‡ Swarmpit exige login interno próprio além do gate SSO (login duplo).
+† Portainer: login OIDC via Keycloak (`superadmin` entra via `preferred_username`). Com OAuth ativo, o
+Portainer CE só permite login interno do admin inicial (`admin`) — fallback anti-lockout. ‡ Swarmpit exige
+login interno próprio além do gate SSO (login duplo).
 
 TLS nas URLs `sslip.io` é **self-signed** (o navegador avisa; prossiga). `<svc>.<eip>.sslip.io`
 resolve para o EIP sem DNS próprio — ver CLAUDE.md ("SSO / Ingress") para o padrão de hairpin (browser usa a
@@ -450,10 +475,6 @@ URL externa; chamadas internas de um serviço para o Keycloak usam `http://keycl
 
 ## Pendências
 
-- **Portainer OAuth**: o client Keycloak `portainer` e o router Traefik já existem, mas ativar o OAuth na UI
-  do Portainer (Settings → Authentication → OAuth) exige logar com o admin interno, cuja senha não está
-  documentada. Enquanto isso, as portas 9000/9443 seguem publicadas no host. Depois de confirmar o login
-  OAuth, remover essas portas do `stacks/08-apps-stack.yml` e redeploy `apps`.
 - **Swarmpit**: mantém login interno próprio (login duplo) e seu CouchDB roda sem autenticação própria
   (`COUCHDB_USER`/`PASSWORD` nunca definidos) — não publicado no host, mas vale endurecer numa próxima etapa.
 - **Segredos placeholder vivos**: os `_CHANGE_ME` do repo público (client-secret do oauth2-proxy, cookie

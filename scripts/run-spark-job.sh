@@ -50,4 +50,4 @@ fi
 echo ">> submetendo..."
 docker exec -u 0 "$CID" sh -c "export HOME=/root && cd /opt/bitnami/spark && \
   bin/spark-submit --conf spark.jars.ivy=/root/.ivy2 $PKG_ARG \
-  --master spark://spark-master:7077 /tmp/$BASE"
+  --master spark://spark-master-1:7077,spark-master-2:7077,spark-master-3:7077 /tmp/$BASE"

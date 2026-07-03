@@ -111,24 +111,42 @@ services:
       start_period: 60s
 
   # ---------------------------------------------------------------------------
-  # Apache Spark Master (node-1 only)
-  # High Availability via Docker Swarm restart policy
-  # UI: http://<ip-node-1>:8090
+  # Apache Spark Master - HA via ZooKeeper (spark.deploy.recoveryMode=ZOOKEEPER)
+  # Tres masters, um por no (spark-master-1/2/3). Um e eleito ALIVE (lider), os
+  # outros dois ficam STANDBY; se o lider cair, o ZK elege outro e os workers +
+  # jobs em voo migram para ele. Ensemble ZK em stacks/13-zookeeper.yml (subir
+  # ANTES deste redeploy).
+  #
+  # SPARK_MASTER_OPTS: o launcher do Spark (SparkClassCommandBuilder) injeta o
+  # conteudo desta env como -D... na JVM da classe Master (confirmado: a classe
+  # consome SPARK_DAEMON_JAVA_OPTS + SPARK_MASTER_OPTS). E por aqui, e NAO pelo
+  # spark-defaults.conf compartilhado (escopo do agente de integracao), que o
+  # recoveryMode=ZOOKEEPER e ligado.
+  #
+  # Sem SPARK_MASTER_HOST: o container nao tem o IP real da VM em nenhuma
+  # interface; o start-master.sh usa `hostname -f` (resolve para o IP do
+  # proprio container), bindavel. Um bind explicito na VIP falharia (BindException).
+  #
+  # 7077 NAO e mais publicada no host: a publicacao antiga era inocua (o processo
+  # binda so no IP overlay) e com 3 masters de mesma porta exigiria mode:host.
+  # Acesso RPC e sempre por nome de servico no overlay.
+  #
+  # Mounts: os tres montam spark-defaults.conf + o jar spark-hadoop-cloud (existem
+  # nos 3 nos via 07-sync-config). SO o spark-master-1 (node-1, no de submissao do
+  # Airflow) monta /opt/datastack/jobs e /data/shared - esses paths so existem no
+  # node-1. UI: http://<ip-node-1>:8090 (quando o master roda no node-1).
   # ---------------------------------------------------------------------------
-  spark-master:
+  spark-master-1:
     image: bitnamilegacy/spark:3.5
-    environment:
+    environment: &spark-master-env
       SPARK_MODE: master
       SPARK_RPC_AUTHENTICATION_ENABLED: "no"
       SPARK_RPC_ENCRYPTION_ENABLED: "no"
       SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
       SPARK_SSL_ENABLED: "no"
-      # Sem SPARK_MASTER_HOST: o container nao tem o IP real da VM em
-      # nenhuma interface (so a rede overlay e o docker_gwbridge local),
-      # e um bind explicito nele falha com BindException. Deixa o bitnami
-      # auto-detectar o IP do proprio container.
       SPARK_MASTER_PORT: "7077"
       SPARK_MASTER_WEBUI_PORT: "8090"
+      SPARK_MASTER_OPTS: "-Dspark.deploy.recoveryMode=ZOOKEEPER -Dspark.deploy.zookeeper.url=zk-1:2181,zk-2:2181,zk-3:2181 -Dspark.deploy.zookeeper.dir=/spark-ha"
     volumes:
       - /opt/datastack/config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
       # spark-hadoop-cloud: PathOutputCommitProtocol/BindingParquetOutputCommitter
@@ -136,21 +154,11 @@ services:
       # nos Spark ou executor falha com ClassNotFound.
       - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
       - spark_logs:/opt/bitnami/spark/logs
-      # Pasta compartilhada de CODIGO (nao dados) entre Jupyter (/home/jovyan/shared),
-      # spark-master (/opt/shared) e Airflow (/opt/shared) - mesmo /data/shared do
-      # host (sticky 1777) montado nos 3. DADOS trafegam via s3a:// SEMPRE: os
-      # executores em node-2/node-3 nao enxergam o disco local do node-1, so o
-      # driver (que roda aqui, no master, via spark-submit) enxergaria /opt/shared.
+      # Pasta compartilhada de CODIGO (nao dados) - SO node-1. Jobs .py do Airflow
+      # (ro) - SO node-1. Estes dois mounts existem apenas no spark-master-1, o no
+      # de submissao (Airflow faz docker exec no container do master no node-1).
       - /data/shared:/opt/shared
-      # Jobs .py do Airflow (ro): permite os DAGs referenciarem o job direto por
-      # caminho (/opt/datastack/jobs/<job>.py) no spark-submit, sem `docker cp`
-      # previo (o scheduler ja monta o mesmo /opt/datastack/jobs, tambem ro).
       - /opt/datastack/jobs:/opt/datastack/jobs:ro
-    # 8090 (UI) fechada: acesso agora via https://spark.<eip>.sslip.io
-    # (Traefik + SSO). 7077 (RPC do master, usado por spark-submit/workers de
-    # fora do overlay) continua publicada.
-    ports:
-      - "7077:7077"
     networks:
       - datastack-net
     deploy:
@@ -163,9 +171,65 @@ services:
         delay: 10s
       resources:
         limits:
-          memory: 8G
+          memory: 2G
         reservations:
-          memory: 4G
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  spark-master-2:
+    image: bitnamilegacy/spark:3.5
+    environment: *spark-master-env
+    volumes:
+      - /opt/datastack/config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+      - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
+      - spark_logs_2:/opt/bitnami/spark/logs
+    networks:
+      - datastack-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-2
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  spark-master-3:
+    image: bitnamilegacy/spark:3.5
+    environment: *spark-master-env
+    volumes:
+      - /opt/datastack/config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+      - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
+      - spark_logs_3:/opt/bitnami/spark/logs
+    networks:
+      - datastack-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == node-3
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090"]
       interval: 30s
@@ -180,7 +244,9 @@ services:
     image: bitnamilegacy/spark:3.5
     environment:
       SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
+      # HA: lista dos 3 masters. O worker registra no lider (ALIVE) e, num
+      # failover, re-registra automaticamente no novo lider eleito pelo ZK.
+      SPARK_MASTER_URL: spark://spark-master-1:7077,spark-master-2:7077,spark-master-3:7077
       SPARK_WORKER_MEMORY: 40G
       SPARK_WORKER_CORES: "28"
       SPARK_RPC_AUTHENTICATION_ENABLED: "no"
@@ -218,7 +284,9 @@ services:
     image: bitnamilegacy/spark:3.5
     environment:
       SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
+      # HA: lista dos 3 masters. O worker registra no lider (ALIVE) e, num
+      # failover, re-registra automaticamente no novo lider eleito pelo ZK.
+      SPARK_MASTER_URL: spark://spark-master-1:7077,spark-master-2:7077,spark-master-3:7077
       SPARK_WORKER_MEMORY: 40G
       SPARK_WORKER_CORES: "28"
       SPARK_RPC_AUTHENTICATION_ENABLED: "no"
@@ -380,6 +448,13 @@ volumes:
   hive_warehouse:
     driver: local
   spark_logs:
+    driver: local
+  # Logs dos masters HA em node-2/node-3 (o spark_logs original fica no node-1
+  # com o spark-master-1). Bind-mount por no; volumes locais distintos evitam
+  # colisao de nome entre tasks em nos diferentes.
+  spark_logs_2:
+    driver: local
+  spark_logs_3:
     driver: local
   spark_history_logs:
     driver: local

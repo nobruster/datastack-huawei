@@ -177,10 +177,20 @@ http:
       loadBalancer:
         servers:
           - url: "http://seaweedfs-admin:23646"
+    # HA via ZooKeeper: 3 masters (spark-master-1/2/3), um lider por vez -
+    # servico Swarm "spark-master" (singular, sem sufixo) nao existe mais.
+    # Load-balancer com os TRES: quem cair num STANDBY ve a propria pagina do
+    # standby (mostra "Status: STANDBY" e o endereco do lider atual) - aceitavel,
+    # nao um erro. Alternativa rejeitada conscientemente: nao da pra trocar por
+    # um healthcheck que so aponte pro lider, porque o healthcheck do Traefik
+    # so testa HTTP 200 - o standby responde 200 tambem (serve sua propria UI),
+    # entao ele nao consegue distinguir lider de standby.
     spark-master:
       loadBalancer:
         servers:
-          - url: "http://spark-master:8090"
+          - url: "http://spark-master-1:8090"
+          - url: "http://spark-master-2:8090"
+          - url: "http://spark-master-3:8090"
     spark-history:
       loadBalancer:
         servers:
