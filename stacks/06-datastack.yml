@@ -136,9 +136,11 @@ services:
       # nos Spark ou executor falha com ClassNotFound.
       - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
       - spark_logs:/opt/bitnami/spark/logs
+    # 8090 (UI) fechada: acesso agora via https://spark.<eip>.sslip.io
+    # (Traefik + SSO). 7077 (RPC do master, usado por spark-submit/workers de
+    # fora do overlay) continua publicada.
     ports:
       - "7077:7077"
-      - "8090:8090"
     networks:
       - datastack-net
     deploy:
@@ -180,8 +182,8 @@ services:
       - /opt/datastack/config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
       - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
       - spark_worker_data:/opt/bitnami/spark/work
-    ports:
-      - "8091:8091"
+    # 8091 (worker UI) fechada: baixo valor, sem router Traefik (decisao ja
+    # tomada) - fica protegida pelo Security Group.
     networks:
       - datastack-net
     deploy:
@@ -218,8 +220,8 @@ services:
       - /opt/datastack/config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
       - /opt/datastack/config/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:/opt/bitnami/spark/jars/spark-hadoop-cloud_2.12-3.5.6.jar:ro
       - spark_worker_data:/opt/bitnami/spark/work
-    ports:
-      - "8092:8092"
+    # 8092 (worker UI) fechada: baixo valor, sem router Traefik (decisao ja
+    # tomada) - fica protegida pelo Security Group.
     networks:
       - datastack-net
     deploy:
@@ -254,8 +256,8 @@ services:
     volumes:
       - /opt/datastack/config/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
       - spark_history_logs:/opt/bitnami/spark/logs
-    ports:
-      - "18081:18081"
+    # 18081 fechada: acesso agora via https://spark-history.<eip>.sslip.io
+    # (Traefik + SSO).
     networks:
       - datastack-net
     deploy:
@@ -288,8 +290,10 @@ services:
     volumes:
       - /opt/datastack/config/trino/coordinator:/etc/trino:ro
       - trino_data:/data/trino
-    ports:
-      - "8080:8080"
+    # 8080 fechada: allow-insecure-over-http=true nesse coordinator faz a
+    # porta crua contornar o OAuth2 - esse era o objetivo de fechar. Acesso
+    # SQL externo continua via https://trino.<eip>.sslip.io (OAuth2);
+    # Superset usa trino-coordinator:8080 via overlay (nao afetado).
     networks:
       - datastack-net
     deploy:

@@ -7,10 +7,10 @@ services:
     command: master -ip=seaweedfs-master-1 -ip.bind=0.0.0.0 -port=9333 -mdir=/data -peers=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -defaultReplication=010
     volumes:
       - seaweedfs-master-1:/data
+    # 9333 (master API/UI) fechada: acesso agora via
+    # https://seaweedfs-master.<eip>.sslip.io (Traefik + SSO).
+    # 19333 (peer gRPC entre masters) continua publicada.
     ports:
-      - target: 9333
-        published: 9333
-        mode: host
       - target: 19333
         published: 19333
         mode: host
@@ -32,10 +32,10 @@ services:
     command: master -ip=seaweedfs-master-2 -ip.bind=0.0.0.0 -port=9333 -mdir=/data -peers=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -defaultReplication=010
     volumes:
       - seaweedfs-master-2:/data
+    # 9333 (master API/UI) fechada: acesso agora via
+    # https://seaweedfs-master.<eip>.sslip.io (Traefik + SSO).
+    # 19333 (peer gRPC entre masters) continua publicada.
     ports:
-      - target: 9333
-        published: 9333
-        mode: host
       - target: 19333
         published: 19333
         mode: host
@@ -57,10 +57,10 @@ services:
     command: master -ip=seaweedfs-master-3 -ip.bind=0.0.0.0 -port=9333 -mdir=/data -peers=seaweedfs-master-1:9333,seaweedfs-master-2:9333,seaweedfs-master-3:9333 -defaultReplication=010
     volumes:
       - seaweedfs-master-3:/data
+    # 9333 (master API/UI) fechada: acesso agora via
+    # https://seaweedfs-master.<eip>.sslip.io (Traefik + SSO).
+    # 19333 (peer gRPC entre masters) continua publicada.
     ports:
-      - target: 9333
-        published: 9333
-        mode: host
       - target: 19333
         published: 19333
         mode: host
@@ -155,10 +155,11 @@ services:
     volumes:
       - seaweedfs-filer-1:/data
       - /opt/datastack/config/seaweedfs/s3config.json:/etc/seaweedfs/s3config.json:ro
+    # 8888 (filer UI) fechada: acesso agora via
+    # https://seaweedfs-filer.<eip>.sslip.io (Traefik + SSO).
+    # 8333 (S3 API, usado por Spark/Trino via overlay e potencialmente
+    # clientes S3 externos) continua publicada.
     ports:
-      - target: 8888
-        published: 8888
-        mode: host
       - target: 8333
         published: 8333
         mode: host
@@ -180,10 +181,11 @@ services:
     volumes:
       - seaweedfs-filer-2:/data
       - /opt/datastack/config/seaweedfs/s3config.json:/etc/seaweedfs/s3config.json:ro
+    # 8888 (filer UI) fechada: acesso agora via
+    # https://seaweedfs-filer.<eip>.sslip.io (Traefik + SSO).
+    # 8333 (S3 API, usado por Spark/Trino via overlay e potencialmente
+    # clientes S3 externos) continua publicada.
     ports:
-      - target: 8888
-        published: 8888
-        mode: host
       - target: 8333
         published: 8333
         mode: host
@@ -205,10 +207,11 @@ services:
     volumes:
       - seaweedfs-filer-3:/data
       - /opt/datastack/config/seaweedfs/s3config.json:/etc/seaweedfs/s3config.json:ro
+    # 8888 (filer UI) fechada: acesso agora via
+    # https://seaweedfs-filer.<eip>.sslip.io (Traefik + SSO).
+    # 8333 (S3 API, usado por Spark/Trino via overlay e potencialmente
+    # clientes S3 externos) continua publicada.
     ports:
-      - target: 8888
-        published: 8888
-        mode: host
       - target: 8333
         published: 8333
         mode: host

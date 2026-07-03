@@ -23,8 +23,8 @@ services:
     environment:
       - SWARMPIT_DB=http://db:5984
       - SWARMPIT_INFLUXDB=http://influxdb:8086
-    ports:
-      - "888:8080"
+    # 888 fechada: acesso agora via https://swarmpit.<eip>.sslip.io
+    # (Traefik + SSO).
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:

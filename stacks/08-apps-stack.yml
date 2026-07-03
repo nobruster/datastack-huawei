@@ -7,8 +7,8 @@ services:
   redis:
     image: redis:7-alpine
     command: redis-server --maxmemory 4gb --maxmemory-policy allkeys-lru
-    ports:
-      - "6379:6379"
+    # 6379 fechada: Redis so e usado internamente (Superset), via overlay
+    # (redis:6379). Sem router Traefik/uso externo legitimo.
     volumes:
       - redis-data:/data
     networks:
@@ -37,8 +37,8 @@ services:
     image: datastack/jupyterhub:4.1-oidc
     environment:
       - JUPYTERHUB_ADMIN=admin
-    ports:
-      - "8000:8000"
+    # 8000 fechada: acesso agora via https://jupyter.<eip>.sslip.io
+    # (Traefik, OIDC nativo do Hub).
     volumes:
       - jupyterhub-data:/srv/jupyterhub
       - /var/run/docker.sock:/var/run/docker.sock
@@ -71,8 +71,8 @@ services:
       - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://superset:superset_password_CHANGE_ME@postgres:5432/superset
       - SUPERSET_WEBSERVER_PORT=8088
       - PYTHONPATH=/app/pythonpath
-    ports:
-      - "8088:8088"
+    # 8088 fechada: acesso agora via https://superset.<eip>.sslip.io
+    # (Traefik, OIDC nativo do Flask-AppBuilder).
     volumes:
       - superset-data:/app/superset_home
       - /opt/datastack/config/superset/superset_config.py:/app/pythonpath/superset_config.py:ro
@@ -132,6 +132,14 @@ services:
   portainer:
     image: portainer/portainer-ce:2.20.3
     command: -H unix:///var/run/docker.sock
+    # 9000/9443 MANTIDAS abertas de proposito: OAuth OIDC nativo do Portainer
+    # (client Keycloak "portainer" + router Traefik ja prontos) nao pode ser
+    # confirmado funcionando porque a senha do admin interno do Portainer nao
+    # e conhecida (varios candidatos plausiveis testados via POST /api/auth,
+    # todos rejeitados/bloqueados por brute-force protection). Ver relatorio
+    # para o passo-a-passo de configurar OAuth manualmente na UI
+    # (Settings > Authentication > OAuth) - so fechar estas portas depois
+    # disso confirmado.
     ports:
       - "9000:9000"
       - "9443:9443"

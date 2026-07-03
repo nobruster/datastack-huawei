@@ -11,6 +11,30 @@ tls:
       keyFile: /etc/traefik/tls/ingress.key
 
 http:
+  # ===========================================================================
+  # Middleware de SSO (oauth2-proxy `sso-auth` em modo Traefik ForwardAuth,
+  # variante "static upstream" da doc oficial do oauth2-proxy).
+  #
+  # O forwardAuth aponta pra RAIZ do proxy (http://sso-auth:4180/), nao pra
+  # /oauth2/auth. Por que: o Traefik forwardAuth, quando o servidor de auth
+  # responde 2xx, libera a requisicao pro backend; quando responde qualquer
+  # outra coisa, devolve a resposta VERBATIM pro cliente. Na raiz, o oauth2-proxy
+  # (com --upstream=static://200) devolve 200 se a sessao for valida (libera) e
+  # um 302 -> login do Keycloak se nao for. Esse 302 chega ao browser como
+  # redirect de verdade (o /oauth2/auth devolveria 401 seco, sem redirect real:
+  # o middleware `errors` do Traefik nao reescreve o status 401->302).
+  # Os endpoints /oauth2/* (start/callback/sign_in) voltam por host via o router
+  # `sso-oauth`. Cookie _oauth2_proxy no dominio .sslip.io => SSO entre os hosts.
+  # ===========================================================================
+  middlewares:
+    sso-auth:
+      forwardAuth:
+        address: "http://sso-auth:4180/"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-Auth-Request-User
+          - X-Auth-Request-Email
+
   routers:
     # --- Keycloak (publico, sem auth) ---
     keycloak:
@@ -19,13 +43,71 @@ http:
       service: keycloak
       tls: {}
 
-    # --- SeaweedFS Admin (protegido por SSO). O host inteiro vai pro
-    #     oauth2-proxy inline, que faz login + proxy pro admin (inclui os
-    #     endpoints /oauth2/* de callback/login no proprio host). ---
+    # --- Endpoints /oauth2/* do oauth2-proxy central. Vale p/ TODOS os hosts
+    #     protegidos: sign_in / start / callback voltam pra ca por host, e a
+    #     regra com PathPrefix tem prioridade natural sobre o router do host. ---
+    sso-oauth:
+      rule: >-
+        (Host(`seaweedfs.<eip>.sslip.io`)
+        || Host(`spark.<eip>.sslip.io`)
+        || Host(`spark-history.<eip>.sslip.io`)
+        || Host(`seaweedfs-filer.<eip>.sslip.io`)
+        || Host(`seaweedfs-master.<eip>.sslip.io`)
+        || Host(`swarmpit.<eip>.sslip.io`)
+        || Host(`traefik.<eip>.sslip.io`))
+        && PathPrefix(`/oauth2/`)
+      entryPoints: [websecure]
+      service: sso-auth
+      tls: {}
+
+    # --- SeaweedFS Admin (protegido por SSO). Agora aponta DIRETO pro admin;
+    #     o SSO vem do middleware sso-auth (antes era proxy reverso inline). ---
     seaweedfs-admin:
       rule: "Host(`seaweedfs.<eip>.sslip.io`)"
       entryPoints: [websecure]
-      service: sso-seaweedfs
+      service: seaweedfs-admin
+      middlewares: [sso-auth]
+      tls: {}
+
+    # --- Spark Master UI (protegido por SSO). ---
+    spark:
+      rule: "Host(`spark.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: spark-master
+      middlewares: [sso-auth]
+      tls: {}
+
+    # --- Spark History Server (protegido por SSO). ---
+    spark-history:
+      rule: "Host(`spark-history.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: spark-history
+      middlewares: [sso-auth]
+      tls: {}
+
+    # --- SeaweedFS Filer UI (protegido por SSO). ---
+    seaweedfs-filer:
+      rule: "Host(`seaweedfs-filer.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: seaweedfs-filer
+      middlewares: [sso-auth]
+      tls: {}
+
+    # --- SeaweedFS Master UI (protegido por SSO). ---
+    seaweedfs-master:
+      rule: "Host(`seaweedfs-master.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: seaweedfs-master
+      middlewares: [sso-auth]
+      tls: {}
+
+    # --- Swarmpit (protegido por SSO). Servico `app` do stack swarmpit (o nome
+    #     `app` e obrigatorio/hardcoded no agent, ja resolve na datastack-net). ---
+    swarmpit:
+      rule: "Host(`swarmpit.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: swarmpit
+      middlewares: [sso-auth]
       tls: {}
 
     # --- Trino (auth OIDC NATIVA no proprio Trino, nao via oauth2-proxy).
@@ -51,13 +133,23 @@ http:
       service: superset
       tls: {}
 
+    # --- Portainer (auth OIDC NATIVA do proprio Portainer, CE - sem
+    #     oauth2-proxy na frente; login duplo seria ruim). Traefik so termina
+    #     TLS e encaminha; o Portainer faz o fluxo OAuth2 com o Keycloak. ---
+    portainer:
+      rule: "Host(`portainer.<eip>.sslip.io`)"
+      entryPoints: [websecure]
+      service: portainer
+      tls: {}
+
     # --- Dashboard do proprio Traefik (api@internal = read-only: mostra
-    #     routers/services/middlewares, nao altera config). Acesso restrito
-    #     pelo Security Group (origem unica). Dashboard fica em /dashboard/. ---
+    #     routers/services/middlewares, nao altera config). Agora tambem
+    #     protegido por SSO. Dashboard fica em /dashboard/. ---
     traefik-dashboard:
       rule: "Host(`traefik.<eip>.sslip.io`)"
       entryPoints: [websecure]
       service: api@internal
+      middlewares: [sso-auth]
       tls: {}
 
   services:
@@ -65,10 +157,36 @@ http:
       loadBalancer:
         servers:
           - url: "http://keycloak:8080"
-    sso-seaweedfs:
+    # oauth2-proxy central (forward-auth). Serve /oauth2/* e responde na raiz
+    # (200 se autenticado / 302 -> Keycloak se nao) p/ o middleware forwardAuth.
+    sso-auth:
       loadBalancer:
         servers:
-          - url: "http://sso-seaweedfs:4180"
+          - url: "http://sso-auth:4180"
+    seaweedfs-admin:
+      loadBalancer:
+        servers:
+          - url: "http://seaweedfs-admin:23646"
+    spark-master:
+      loadBalancer:
+        servers:
+          - url: "http://spark-master:8090"
+    spark-history:
+      loadBalancer:
+        servers:
+          - url: "http://spark-history:18081"
+    seaweedfs-filer:
+      loadBalancer:
+        servers:
+          - url: "http://seaweedfs-filer-1:8888"
+    seaweedfs-master:
+      loadBalancer:
+        servers:
+          - url: "http://seaweedfs-master-1:9333"
+    swarmpit:
+      loadBalancer:
+        servers:
+          - url: "http://app:8080"
     trino:
       loadBalancer:
         servers:
@@ -81,3 +199,7 @@ http:
       loadBalancer:
         servers:
           - url: "http://superset:8088"
+    portainer:
+      loadBalancer:
+        servers:
+          - url: "http://portainer:9000"

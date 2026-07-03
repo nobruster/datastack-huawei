@@ -24,7 +24,13 @@
       "secret": "oauth2-proxy-secret-CHANGE-ME",
       "redirectUris": [
         "https://*.<eip>.sslip.io/oauth2/callback",
-        "https://seaweedfs.<eip>.sslip.io/oauth2/callback"
+        "https://seaweedfs.<eip>.sslip.io/oauth2/callback",
+        "https://spark.<eip>.sslip.io/oauth2/callback",
+        "https://spark-history.<eip>.sslip.io/oauth2/callback",
+        "https://seaweedfs-filer.<eip>.sslip.io/oauth2/callback",
+        "https://seaweedfs-master.<eip>.sslip.io/oauth2/callback",
+        "https://swarmpit.<eip>.sslip.io/oauth2/callback",
+        "https://traefik.<eip>.sslip.io/oauth2/callback"
       ],
       "webOrigins": [
         "+"
@@ -123,6 +129,28 @@
             "jsonType.label": "String"
           }
         }
+      ]
+    },
+    {
+      "clientId": "portainer",
+      "name": "Portainer",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "secret": "portainer-secret-CHANGE-ME",
+      "redirectUris": [
+        "https://portainer.<eip>.sslip.io",
+        "https://portainer.<eip>.sslip.io/*"
+      ],
+      "webOrigins": [
+        "https://portainer.<eip>.sslip.io"
+      ],
+      "defaultClientScopes": [
+        "openid",
+        "email",
+        "profile"
       ]
     }
   ],

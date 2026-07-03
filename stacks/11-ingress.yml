@@ -73,15 +73,21 @@ services:
           memory: 1G
 
   # ---------------------------------------------------------------------------
-  # SSO do SeaweedFS Admin - oauth2-proxy INLINE (proxy reverso do admin).
-  # Redireciona quem nao tem sessao pro login do Keycloak (UX correta) e so
-  # entao encaminha pro upstream. Uma instancia por servico protegido; todas
-  # compartilham cookie-domain/secret/client -> a sessao (cookie _oauth2_proxy
-  # no dominio .sslip.io) e comum = SSO (login unico entre os dashboards).
+  # SSO CENTRAL - oauth2-proxy em modo Traefik ForwardAuth (UM proxy p/ todos).
+  # Nao faz mais proxy reverso de um upstream especifico. O middleware `sso-auth`
+  # (Traefik, em dynamic.yml) chama a RAIZ deste proxy (http://sso-auth:4180/):
+  # se a sessao for valida o proxy devolve 200 (via --upstream=static://200) e o
+  # Traefik libera pro backend; senao devolve 302 -> login do Keycloak, que o
+  # forwardAuth repassa VERBATIM (redirect de verdade no browser). Os endpoints
+  # /oauth2/* (start/callback/sign_in) voltam pra ca por host (router sso-oauth).
+  # Uma instancia / um client / um secret / um cookie (_oauth2_proxy no dominio
+  # .sslip.io) -> SSO real: login unico entre todos os dashboards.
   # Hairpin: o container nao alcanca o EIP, entao redeem/jwks usam a URL
   # INTERNA (http://keycloak:8080); so o login (browser) usa a URL externa.
+  # --upstream=static://200 responde 200 na raiz p/ o ramo "autenticado" do
+  # forwardAuth (oauth2-proxy tambem exige um upstream configurado p/ subir).
   # ---------------------------------------------------------------------------
-  sso-seaweedfs:
+  sso-auth:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
     command:
       - --http-address=0.0.0.0:4180
@@ -101,7 +107,8 @@ services:
       - --cookie-secure=true
       - --email-domain=*
       - --skip-provider-button=true
-      - --upstream=http://seaweedfs-admin:23646
+      - --set-xauthrequest=true
+      - --upstream=static://200
     networks:
       - datastack-net
     deploy:
