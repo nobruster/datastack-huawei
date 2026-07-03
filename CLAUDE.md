@@ -475,6 +475,24 @@ fixes — all real, all non-obvious:
    `...connection.timeout=8000` to make the real S3 error surface immediately instead of backing off for
    minutes.
 
+5. **S3 versioning on a bucket breaks EVERY Spark write to it (SeaweedFS 4.37).** If anyone enables (and
+   even later suspends) versioning on a bucket — e.g. via the SeaweedFS Admin UI — every DeleteObject on
+   that bucket goes through the filer's `deleteVersionedObject` path, which has a path bug (it tries
+   `UpdateEntry` on `/buckets/<bucket>/<last-segment>` instead of the full key path) and answers
+   **500 InternalError**. Since the magic committer *deletes* the `__magic` dir on commit and
+   `mode("overwrite")` deletes the destination, every Spark job fails with
+   `AWSStatus500Exception: Remove S3 Dir Markers on <path>` (or hangs in retry) and leaves
+   `__magic`/`*.versions` debris behind — even on a fresh path. Diagnosis: the filer log shows
+   `deleteVersionedObject: failed to delete null version ... no entry is found`, and the bucket carries the
+   `Seaweed-X-Amz-Versioning` extended attribute
+   (`wget -qO- 'http://127.0.0.1:8888/buckets/<b>/?metadata=true'` inside the filer container; base64 value
+   `U3VzcGVuZGVk` = "Suspended"). `s3.bucket.versioning` in `weed shell` only toggles Enabled/Suspended —
+   it cannot turn versioning off. Fix: remove the attribute via the filer tagging API
+   (`curl -X DELETE 'http://127.0.0.1:8888/buckets/<b>?tagging=X-Amz-Versioning'`) and clean the debris
+   with `fs.rm -r`. Do **NOT** recreate the bucket to "reset" it — `s3.bucket.delete` deletes the physical
+   collection (the data) with it. This took down the `landing` bucket on 2026-07-02/03 (faker notebooks +
+   `_fresh_*` smoke tests).
+
 Two more traps hit while running jobs:
 - **`docker exec ... spark-submit` fails Hadoop UGI login** (`invalid null input: name`) because the exec
   bypasses the bitnami entrypoint and uid 1001 has no `/etc/passwd` entry. Run the driver as a user that
