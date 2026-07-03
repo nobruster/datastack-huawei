@@ -8,13 +8,13 @@ Stack de processamento de dados rodando em **Docker Swarm** na **Huawei Cloud HC
 - **Região:** LA-Sao Paulo-Brazil Dataprev Gov-Cloud (la-south-6001)
 - **Orquestração:** Docker Swarm (3 managers)
 - **Rede privada:** <subnet-privada>
-- **EIP node-1:** <eip>
+- **EIP node-1:** `<eip>` (IP público real não versionado neste repo — obtenha no console Huawei Cloud ou com o administrador)
 
 ## IPs dos Nós
 
 | Nó | IP Privado | EIP | Papel |
 |---|---|---|---|
-| node-1 | <ip-node-1> | <eip> | Swarm manager (leader), PostgreSQL, Hive Metastore, Spark Master-1 (HA/ZK), Spark History Server, Trino Coordinator, Redis, JupyterHub, Superset, Portainer, Swarmpit, Airflow, Traefik, Keycloak, ZooKeeper (zk-1) |
+| node-1 | <ip-node-1> | `<eip>` | Swarm manager (leader), PostgreSQL, Hive Metastore, Spark Master-1 (HA/ZK), Spark History Server, Trino Coordinator, Redis, JupyterHub, Superset, Portainer, Swarmpit, Airflow, Traefik, Keycloak, ZooKeeper (zk-1) |
 | node-2 | <ip-node-2> | - | Swarm manager, Spark Master-2 (HA/ZK), Spark Worker, Trino Worker, SeaweedFS (master+volume+filer), ZooKeeper (zk-2) |
 | node-3 | <ip-node-3> | - | Swarm manager, Spark Master-3 (HA/ZK), Spark Worker, Trino Worker, SeaweedFS (master+volume+filer), ZooKeeper (zk-3) |
 
@@ -54,7 +54,7 @@ publicados no host e protegidos pelo Security Group.
 | Keycloak (IdP/SSO) | 25.0 | 8080 (interno) | `keycloak.<eip>.sslip.io` | node-1 | ingress |
 | oauth2-proxy (`sso-auth`, forward-auth único) | v7.6.0 | 4180 (interno) | — (middleware do Traefik) | node-1 | ingress |
 
-`<eip>` = `<eip>`. † Portainer: OAuth OIDC via Keycloak ativo e validado; 9000/9443 fechadas —
+`<eip>` = EIP público do node-1 (valor real não versionado; substitua nas URLs). † Portainer: OAuth OIDC via Keycloak ativo e validado; 9000/9443 fechadas —
 acesso só via Traefik. ‡ Swarmpit tem o gate SSO do Traefik **mais** o
 login interno próprio (login duplo — limitação da ferramenta). Spark RPC (7077) não é mais publicado no
 host desde a HA via ZooKeeper (3 masters de mesma porta exigiriam `mode: host`; acesso RPC agora é sempre

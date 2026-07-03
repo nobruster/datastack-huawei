@@ -16,7 +16,7 @@ Docker — there is no native/host-installed service in the stack (PostgreSQL us
 
 | Node | Private IP | EIP | Role |
 |---|---|---|---|
-| node-1 | <ip-node-1> | <eip> | Swarm manager (leader), PostgreSQL, Hive Metastore, Spark Master, Spark History, Trino Coordinator, Redis, JupyterHub, Superset, Portainer, Swarmpit |
+| node-1 | <ip-node-1> | `<eip>` (real value not committed) | Swarm manager (leader), PostgreSQL, Hive Metastore, Spark Master, Spark History, Trino Coordinator, Redis, JupyterHub, Superset, Portainer, Swarmpit |
 | node-2 | <ip-node-2> | none | Swarm manager, Spark Worker, Trino Worker, SeaweedFS |
 | node-3 | <ip-node-3> | none | Swarm manager, Spark Worker, Trino Worker, SeaweedFS |
 
