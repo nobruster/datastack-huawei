@@ -320,6 +320,39 @@ Traefik got a new router (`config/traefik/dynamic/dynamic.yml`, `superset` → `
   take effect on the running cluster, same as any other admin-API-created object per the "session state
   drifts" note above. The JSON file is still correct/authoritative for a *fresh* deploy (empty DB).
 
+## PySpark client from JupyterHub notebooks — version-matching traps (all hit in sequence)
+
+`notebooks/faker-landing.ipynb` is the working reference (Faker → `s3a://landing/faker-demo/pessoas/`).
+A notebook driver connecting to `spark://spark-master:7077` must match the cluster on TWO axes, and the
+DockerSpawner image (`jupyter/pyspark-notebook:spark-3.5.0`) matches neither out of the box:
+
+1. **Exact Spark version (3.5.6, not just "3.5.x").** The image ships Spark/PySpark 3.5.0; the cluster runs
+   3.5.6. Java task serialization is strict about `serialVersionUID` of scheduler classes → any patch-level
+   mismatch dies with `InvalidClassException: org.apache.spark.scheduler.Task; local class incompatible`.
+   Fix (notebook cell, before any `import pyspark`): download the exact `spark-3.5.6-bin-hadoop3` tarball
+   from archive.apache.org into `work/` (persistent volume, one-time ~400MB), point `SPARK_HOME` +
+   `sys.path` at it.
+2. **Same Python minor version (3.12).** The notebook kernel is conda Python 3.11; the bitnami executors
+   only have 3.12 → `[PYTHON_VERSION_MISMATCH] Python in worker has different version (3, 12) than that in
+   driver 3.11`. In a notebook the driver Python IS the kernel process, so the fix is a matching kernel:
+   `mamba create -y -p /home/jovyan/work/envs/py312 python=3.12 ipykernel`, then
+   `/home/jovyan/work/envs/py312/bin/python -m ipykernel install --user --name py312-spark`. The conda env
+   lives on the persistent volume; the kernelspec registration (`~/.local/share/jupyter/kernels/`) does NOT
+   — re-run only the `ipykernel install` line after a container recycle. **The browser tab keeps its old
+   kernel session after the kernelspec is registered** — switching in Kernel > Change Kernel (or reloading
+   the page) is required, and a stale still-running 3.11 driver holds the old Spark app until killed.
+3. Other per-notebook needs (the spawned container inherits nothing from the cluster's
+   `spark-defaults.conf`): full S3A/magic-committer config in the SparkSession builder (including
+   `fs.s3a.directory.marker.retention=keep`), the `spark-hadoop-cloud` jar via `spark.jars.packages`, and
+   `spark.jars.ivy=/home/jovyan/work/.ivy2` so the ~750MB dependency cache survives container recycles.
+   Credentials come from `work/.env` via python-dotenv (never hardcoded in cells).
+4. **Any mid-write failure leaves `__magic`/`__magic.versions` + orphaned multipart uploads at the
+   destination**, and the next `mode("overwrite")` fails with `AWSStatus500Exception: delete on <path>` /
+   `FileAlreadyExistsException ... __magic ... since it is a file`. Clean with `weed shell`:
+   `fs.rm -r /buckets/<bucket>/<path>` (+ `s3.clean.uploads -timeAgo 1m`) before re-running — same lesson
+   as the landing job, it just recurs much more often in notebooks because every version-mismatch failure
+   above also aborted mid-write.
+
 ## Known gotchas
 
 - **`restart_policy.condition` must be `any` for every long-running service.** With `on-failure`, a clean
